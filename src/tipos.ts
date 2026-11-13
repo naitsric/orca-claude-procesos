@@ -1,0 +1,112 @@
+// Tipos que comparten el worker y el panel. Solo datos JSON: viajan por plugin.request y posts.
+
+/** Qué es cada proceso dentro del árbol de una sesión de Claude Code. */
+export type Rol =
+  | 'sesion' // el propio `claude`
+  | 'mcp' // servidor MCP que lanzó la sesión (y sus hijos)
+  | 'bash' // shell de la herramienta Bash
+  | 'comando' // algo que corrió dentro de ese shell
+  | 'servidor' // escucha en un puerto TCP
+  | 'tunel' // SSM, ssh -L, ngrok, cloudflared
+  | 'navegador' // Chrome o Chromium de Playwright
+  | 'despierto' // caffeinate
+  | 'agente' // otro `claude` lanzado desde la sesión
+  | 'otro'
+
+/** cerrar: no cumple ninguna función. revisar: decide tú. dejar: lo necesita una sesión viva. */
+export type Veredicto = 'cerrar' | 'revisar' | 'dejar'
+
+/** segura: el plugin vio nacer el proceso bajo una sesión o lleva una marca de Claude.
+ *  probable: solo se parece a algo que lanza Claude (por ejemplo un servidor MCP sin dueño). */
+export type Certeza = 'segura' | 'probable'
+
+export type Proceso = {
+  pid: number
+  ppid: number
+  pgid: number
+  /** Milisegundos desde epoch, aproximado a partir de `etime` (±1 s). Junto al pid identifica el proceso. */
+  inicio: number
+  rssKb: number
+  cpu: number
+  /** Etiqueta corta: el ejecutable o lo que lo describe mejor. */
+  nombre: string
+  /** Línea de comando recortada. */
+  comando: string
+  rol: Rol
+  /** Profundidad bajo la sesión o el huérfano de arriba, para sangrar la lista. */
+  nivel: number
+  puertos: number[]
+  veredicto: Veredicto
+  motivo: string
+  /** Colgaba de launchd aunque su sesión sigue viva: sobrevivirá cuando la cierres. */
+  desacoplado?: boolean
+}
+
+export type Sesion = {
+  pid: number
+  inicio: number
+  /** El nombre que Claude Code le da a la sesión (`~/.claude/sessions/<pid>.json`). */
+  nombre: string | null
+  /** El id de la conversación: con él se retoma (`claude --resume <id>`). */
+  sessionId: string | null
+  /** `busy` mientras trabaja; `idle` esperando un mensaje. null si Claude Code no lo publica. */
+  estado: string | null
+  /** Desde cuándo está en ese estado. */
+  estadoDesde: number | null
+  rssKb: number
+  /** La sesión más todos sus procesos. */
+  rssTotalKb: number
+  cpu: number
+  tty: string
+  cwd: string | null
+  /** Dónde corre: Orca, Ghostty, Terminal, Claude Desktop u otra. */
+  anfitrion: string
+  /** El id de `--resume`, si arrancó así. */
+  reanuda: string | null
+  comando: string
+  procesos: Proceso[]
+  veredicto: Veredicto
+  motivo: string
+}
+
+export type Huerfano = Proceso & {
+  certeza: Certeza
+  cwd: string | null
+  /** La sesión que lo lanzó, si el plugin la conoció. */
+  origen: { pid: number; nombre: string | null; cwd: string | null; termino: number | null } | null
+}
+
+export type Totales = {
+  sesiones: number
+  procesos: number
+  rssKb: number
+  huerfanos: number
+  huerfanosSeguros: number
+  huerfanosRssKb: number
+  /** Puertos que ocupan los huérfanos. */
+  puertosHuerfanos: number[]
+}
+
+/** Una foto del sistema: lo que el worker devuelve y publica en cada revisión. */
+export type Foto = {
+  tomadaEn: number
+  /** El home del usuario, para mostrar rutas con ~. */
+  home: string
+  sesiones: Sesion[]
+  huerfanos: Huerfano[]
+  totales: Totales
+  /** El worker no pudo leer los procesos; el resto viene vacío. */
+  error?: string
+}
+
+/** Un proceso a cerrar. `inicio` evita matar un pid que el sistema ya reutilizó. */
+export type Objetivo = { pid: number; inicio: number }
+
+export type Senal = 'TERM' | 'KILL'
+
+export type ResultadoCierre = {
+  pid: number
+  nombre: string
+  resultado: 'cerrado' | 'sigue-vivo' | 'rechazado' | 'error'
+  detalle?: string
+}
