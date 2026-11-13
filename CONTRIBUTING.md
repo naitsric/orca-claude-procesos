@@ -49,6 +49,7 @@ logic and panel tests run against a made-up system in `src/fixtures.ts`.
 | `src/tipos.ts` | Data types shared by both sides. |
 | `src/formato.ts` | Formatting for memory, durations and ports. |
 | `src/fixtures.ts` | A made-up system for tests and for `orca plugin check`. |
+| `design/` | The icon. `icon.svg` is the source; `render-icon.sh` renders `icon.png` (README) and `icon-256.png` (Orca) with headless Chrome. |
 
 ## Guidelines
 

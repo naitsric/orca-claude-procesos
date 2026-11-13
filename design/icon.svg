@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Procesos de Claude icon. macOS grid: 824×824 body at (100,100), corner radius 185.
+    A terminal session with its process tree; the amber node has broken off: an orphan.
+    Rendered by design/render-icon.sh.
+  -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0956b"/>
+      <stop offset="1" stop-color="#b8462a"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffe6da"/>
+      <stop offset="0.45" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffd6c4"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffd9c9"/>
+    </linearGradient>
+    <linearGradient id="orphan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc94d"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="drop" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#4a1608" flood-opacity="0.32"/>
+    </filter>
+    <filter id="lift" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#4a1608" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#drop)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="3"/>
+
+  <!-- The tree: solid branches to the live processes, one path so the joints don't stack. -->
+  <path d="M300 600 V540 H512 M512 430 V600" fill="none" stroke="#ffffff" stroke-width="30"
+        stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.92"/>
+
+  <!-- The broken branch: dotted, and it never reaches the orphan. -->
+  <path d="M572 540 H724 V590" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round"
+        stroke-linejoin="round" stroke-dasharray="0 52" stroke-opacity="0.75"/>
+
+  <!-- The session: a terminal with a prompt. -->
+  <g filter="url(#lift)">
+    <rect x="372" y="236" width="280" height="194" rx="48" fill="url(#card)"/>
+  </g>
+  <g fill="none" stroke="#c4502f" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M436 298 L482 333 L436 368"/>
+    <path d="M512 368 H576"/>
+  </g>
+
+  <!-- Live processes. -->
+  <g filter="url(#lift)">
+    <circle cx="300" cy="676" r="78" fill="url(#node)"/>
+    <circle cx="512" cy="676" r="78" fill="url(#node)"/>
+  </g>
+  <circle cx="300" cy="676" r="30" fill="#f2b79c"/>
+  <circle cx="512" cy="676" r="30" fill="#f2b79c"/>
+
+  <!-- The orphan. -->
+  <g filter="url(#lift)">
+    <circle cx="724" cy="704" r="78" fill="url(#orphan)"/>
+  </g>
+  <circle cx="724" cy="704" r="30" fill="#fff4dc"/>
+</svg>

@@ -2,8 +2,9 @@
   "manifestVersion": 2,
   "id": "claude-procesos",
   "name": "Procesos de Claude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Monitor de las sesiones de Claude Code, los procesos que lanzan y los que quedaron huérfanos, con el veredicto de cuáles cerrar.",
+  "icon": "design/icon-256.png",
   "author": {
     "name": "naitsric",
     "url": "https://github.com/naitsric"

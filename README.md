@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="design/icon.png" width="128" alt="Procesos de Claude">
+</p>
+
 <h1 align="center">Procesos de Claude</h1>
 
 <p align="center">
