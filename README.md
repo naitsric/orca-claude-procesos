@@ -1,162 +1,182 @@
-# Procesos de Claude
+<h1 align="center">Procesos de Claude</h1>
 
-Un monitor de actividad para [Claude Code](https://claude.com/claude-code) dentro de
-[Orca](https://github.com/stablyai/orca). Muestra:
+<p align="center">
+  <strong>An activity monitor for Claude Code, built into Orca.</strong><br>
+  Sessions · MCP servers · Background commands · Orphaned processes
+</p>
 
-- qué sesiones de `claude` tienes abiertas;
-- qué procesos lanzó cada una (servidores MCP, comandos de Bash, servidores de desarrollo, túneles);
-- cuáles **quedaron vivos después de que su sesión terminó**.
+<p align="center">
+  <img src="https://img.shields.io/badge/Orca-%E2%89%A5%201.4.248-6b5bd2" alt="Orca 1.4.248 or later">
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
 
-Cada proceso trae un veredicto, **cerrar**, **revisar** o **dejar**, con su motivo. Desde el panel
-puedes cerrarlo.
+<!-- screenshot: docs/screenshot.png -->
 
-```
-Procesos de Claude                                   ↻
-5 sesiones · 41 procesos · 2,4 GB · revisado hace 3 s
+## Why Procesos de Claude
 
-┃ 2 procesos huérfanos
-┃ Siguieron vivos después de cerrar su sesión de Claude.
-┃ Ocupan 49 MB y :15432.        [Cerrar todos]  Ver
+Every Claude Code session starts processes of its own: MCP servers, the shells
+behind the Bash tool, and the dev servers and tunnels it launches for you. Most
+of them end with the session. Some don't. A crashed session, a `nohup` from a
+background command or a forgotten tunnel keeps holding memory and ports long
+after anyone needs it. With a few sessions open, Activity Monitor can't tell
+you which `node` belongs to which conversation.
 
- Sesiones (5)   Huérfanos (2)
- › ⚠ api-0e        api · inactiva 21 h · 284 MB · 6 procesos
- › ⚠ web-cb        web · inactiva 14 h · 253 MB · 6 procesos
- ›   refactor-auth api · trabajando · 1,0 GB · 13 procesos
-```
+Procesos de Claude groups every process under the session that started it,
+names each session, finds what outlived its session and tells you what is safe
+to close. It is careful about it: it asks before closing anything, checks each
+process again right before signalling it, and never touches a process that
+isn't Claude's.
 
-## Instalación
+## Features
 
-Necesitas **Orca 1.4.248 o más reciente, en macOS**, con los plugins activados (Settings →
-Plugins → *Turn on plugins*).
+### Every session at a glance
+- **Sessions by name**, as Claude Code names them, with their folder, their
+  terminal and the memory they hold together with everything they started.
+- **Real status**: *working*, or *idle* and for how long. It comes from Claude
+  Code itself and is not guessed from CPU usage.
+- **The full process tree** of each session: MCP servers, Bash commands and
+  what they run, dev servers with their ports, tunnels, `caffeinate` and nested
+  `claude` runs.
+- Sessions running in any terminal (Orca, Ghostty, Terminal, iTerm2, VS Code)
+  show up, not only Orca's.
 
-**1. Pide la instalación.** Como el plugin corre código, Orca no lo activa sin tu aprobación:
-responde con la lista de lo que pide y una huella (`ap1-…`).
+### Find what outlived its session
+- **Orphans**: processes still running after their session ended, with the
+  session they came from and when it ended.
+- **Detached processes**: things a live session started that are no longer
+  tied to it, such as a `nohup … &` from Bash. They will survive when you close
+  the session.
+- **Certain or probable**: certain when the plugin saw the process start under
+  a session, probable when it only looks like something Claude starts, such as
+  an MCP server with no owner.
+- A **desktop notification** the first time something outlives its session.
 
-```sh
-orca plugin install naitsric/orca-claude-procesos
-```
+### A verdict for every process
+- **Close**: an orphan nobody is using.
+- **Review**:
+  - a session idle for longer than you set;
+  - a command or server running in the background for over an hour;
+  - a detached process;
+  - an MCP server of uncertain origin.
+- **Keep**: what a live session is using, such as its MCP servers,
+  `caffeinate` and commands in progress.
+- Every verdict comes with its reason. Selecting a row shows its full command
+  line.
 
-**2. Apruébalo con la huella que te dio:**
+### Close with care
+- **The confirmation appears where you clicked**, inside the session card or in
+  place of the orphan alert. It lists what will close, the memory it frees and
+  the ports it releases.
+- **It spells out the consequences**:
+  - a busy session loses the task in progress;
+  - closing an MCP server takes its tools away from the session;
+  - a closed session can be resumed with the `claude --resume <id>` it shows.
+- **SIGTERM first**, so sessions shut down their own MCP servers. SIGKILL only
+  if something doesn't respond, and only when you ask for it.
+- **Checked again before every signal**: the worker takes a fresh snapshot
+  and only signals processes that are still there with the same start time, so
+  a reused PID is never hit. Processes of other users and anything not tied to
+  Claude are never offered.
 
-```sh
-orca plugin install naitsric/orca-claude-procesos --approve ap1-xxxxxxxx
-```
+### Always in sight
+- A **status bar item**, `Claude 5 · 2 huérfanos`, that turns amber when there
+  are orphans and red when they hold ports. Click it to check now.
+- Two **command palette** entries: check now, and close every certain orphan.
 
-**3. Ábrelo.** Aparece en la barra lateral derecha como **Procesos de Claude** (icono de
-actividad), y en la barra de estado como `Claude N`. También se abre con:
+## Install
 
-```sh
-orca plugin open naitsric.claude-procesos --panel procesos
-```
+Requires **Orca 1.4.248 or later on macOS**, with plugins turned on
+(Settings → Plugins → *Turn on plugins*).
 
-> **¿`orca: command not found`?** El CLI viene dentro de la app:
-> `/Applications/Orca.app/Contents/Resources/bin/orca`. Puedes usar esa ruta completa o crear un
-> alias: `alias orca=/Applications/Orca.app/Contents/Resources/bin/orca`.
+1. **Request the install.** The plugin runs code, so Orca asks for your approval
+   first. It prints the access the plugin requests and a fingerprint:
 
-### Qué permisos pide
+   ```sh
+   orca plugin install naitsric/orca-claude-procesos
+   ```
 
-| Permiso | Para qué |
+2. **Approve it** with that fingerprint:
+
+   ```sh
+   orca plugin install naitsric/orca-claude-procesos --approve ap1-…
+   ```
+
+3. **Open it** from Orca's right sidebar (**Procesos de Claude**), or with:
+
+   ```sh
+   orca plugin open naitsric.claude-procesos --panel procesos
+   ```
+
+The `orca` CLI ships inside the app. If your shell can't find it, use
+`/Applications/Orca.app/Contents/Resources/bin/orca` or add an alias for it.
+
+**Update** with `orca plugin update naitsric.claude-procesos`. It asks for
+approval again only if the requested access changes. **Uninstall** with
+`orca plugin uninstall naitsric.claude-procesos`.
+
+### Permissions
+
+| Access | Why |
 | --- | --- |
-| Correr código en Node con tu usuario (`trusted-worker`) | Ejecutar `ps` y `lsof`, leer `~/.claude/sessions/` y mandar las señales para cerrar procesos. |
-| `storage:own` | Recordar qué procesos nacieron bajo cada sesión: es lo que delata a los huérfanos. |
-| `settings:own` | Leer sus ajustes. |
-| `notifications:show` | Avisarte cuando aparece un huérfano. |
+| Run code in Node.js as your user (`trusted-worker`) | List processes with `ps` and `lsof`, read `~/.claude/sessions/`, and signal the processes you choose to close. |
+| `storage:own` | Remember which processes started under each session. That record is how it recognizes orphans. |
+| `settings:own` | Read its own settings. |
+| `notifications:show` | Tell you when something outlives its session. |
 
-No hace pedidos de red ni lee nada fuera de la lista de procesos y de `~/.claude/sessions/`.
+The plugin makes no network requests.
 
-### Actualizar o desinstalar
+## Settings
 
-```sh
-orca plugin update naitsric.claude-procesos      # pide aprobación de nuevo solo si cambian los permisos
-orca plugin uninstall naitsric.claude-procesos
-```
+In Settings → Plugins → Procesos de Claude:
 
-## Qué trae
-
-- **Panel con dos pestañas.**
-  - *Sesiones:* cada sesión con su nombre, su estado (trabajando o inactiva desde hace cuánto),
-    su memoria y su árbol de procesos.
-  - *Huérfanos:* lo que sobrevivió a su sesión.
-
-  Al marcar filas ves el motivo de cada veredicto y la línea de comando completa.
-- **Cerrar con confirmación en el lugar.** La pregunta aparece donde pulsaste y dice:
-  - qué se cierra y cuánta memoria libera;
-  - qué pasa: si la sesión está trabajando se corta la tarea, si cierras un MCP la sesión pierde
-    esas herramientas;
-  - con qué `claude --resume <id>` retomar la conversación.
-
-  Usa SIGTERM y, si algo no responde, ofrece forzarlo con SIGKILL.
-- **Barra de estado:** `Claude 5 · 2 huérfanos`, en amarillo o rojo si hay huérfanos ocupando
-  puertos. Al pulsarla revisa en ese momento.
-- **Paleta de comandos:** *Procesos de Claude: revisar ahora* y *cerrar los huérfanos seguros*.
-- **Notificación** la primera vez que un proceso de Claude sobrevive a su sesión.
-
-## Ajustes
-
-En Settings → Plugins → Procesos de Claude:
-
-| Ajuste | Por defecto | |
+| Setting | Default | |
 | --- | --- | --- |
-| Cada cuántos segundos revisar | 15 | Entre 5 y 300. |
-| Horas para marcar una sesión como larga | 12 | Una sesión inactiva más tiempo que esto queda en «revisar». |
-| Avisar cuando aparezcan huérfanos | Sí | Notificación de escritorio. |
+| Check interval | 15 s | From 5 to 300 seconds. |
+| Long session threshold | 12 h | A session idle for longer than this is marked for review. |
+| Notify about orphans | On | A desktop notification the first time a process outlives its session. |
 
-## Cómo decide
+## How it works
 
-| Veredicto | Cuándo |
-| --- | --- |
-| **Cerrar** | Huérfanos seguros: su sesión de Claude terminó y nadie los usa. |
-| **Revisar** | Sesiones inactivas más horas que las del ajuste. Comandos o servidores que llevan más de una hora en segundo plano. Procesos que se desprendieron de su sesión, por ejemplo un `nohup … &` lanzado desde Bash, que seguirán vivos cuando la cierres. Servidores MCP sueltos de origen dudoso. |
-| **Dejar** | Lo que una sesión viva está usando: sus servidores MCP, `caffeinate` y los comandos en curso. |
+**Sessions.** A process belongs to a session when it descends from a `claude`
+process. The name, conversation ID and status come from
+`~/.claude/sessions/<pid>.json`, which Claude Code keeps up to date. On
+versions that don't write that file, the panel uses the folder and CPU usage
+instead.
 
-Para saber qué es de Claude:
+**Orphans.** macOS doesn't let one process read another's environment, so
+there is no way to ask a process whether Claude started it. Instead, the worker
+checks every few seconds and keeps a record of what it saw:
+- which processes descended from each session;
+- which process groups each session and each Bash shell led;
+- when each session ended (kept for seven days).
 
-- **De una sesión:** cuelga, directa o indirectamente, de un proceso `claude`. El nombre, el id
-  y el estado de cada sesión salen de `~/.claude/sessions/<pid>.json`, que Claude Code mantiene
-  al día. Si no existe (versiones viejas), se usan la carpeta y el CPU.
-- **Huérfano seguro:** cuelga de launchd y el plugin lo vio nacer bajo una sesión que ya terminó.
-  También cuenta si conserva el grupo de procesos de esa sesión o de uno de sus shells, o si es
-  un shell de la herramienta Bash (lleva la marca `~/.claude/shell-snapshots`).
-- **Huérfano probable:** un servidor MCP suelto sin más pistas. Puede ser de otra app (Cursor,
-  Claude Desktop), así que queda en «revisar».
+A process whose parent is `launchd` is a certain orphan when it matches that
+record, or when it is a Bash tool shell, which carries the
+`~/.claude/shell-snapshots` marker. Orphans whose session ended before the
+plugin was installed can only be recognized by that marker; MCP servers among
+them show up as probable.
 
-macOS no deja leer las variables de entorno de otros procesos. Por eso la certeza viene de lo
-que el plugin recuerda entre revisiones: grupos, linaje y las sesiones de los últimos 7 días. Lo
-que murió **antes** de instalarlo solo se reconoce por sus marcas.
+**Safety.** Every close goes through the worker. It takes a new snapshot and
+signals a process only if it is still there, belongs to your user and has the
+same start time as the one you chose.
 
-Antes de cerrar, el worker vuelve a revisar. Solo manda la señal a procesos que siguen en la foto
-con la misma hora de inicio, así nunca mata un pid que el sistema le dio a otro proceso ni algo
-que no sea de Claude. Tampoco toca procesos de otros usuarios.
+## Roadmap
 
-## Limitaciones
+- English interface (the UI is in Spanish today)
+- Jump from a session to its Orca terminal
+- Linux support
 
-- Solo probado en macOS. Usa `ps` y `/usr/sbin/lsof` de macOS.
-- Cuenta sesiones de Claude Code en cualquier terminal (Orca, Ghostty, Terminal, iTerm2, VS
-  Code…). El panel vive en Orca.
+## Contributing
 
-## Desarrollo
+The plugin is plain TypeScript that Orca loads without a build step. See
+[CONTRIBUTING.md](CONTRIBUTING.md) to load it from a clone, run the tests and
+find your way around the code.
 
-```sh
-git clone https://github.com/naitsric/orca-claude-procesos
-cd orca-claude-procesos
-orca plugin dev load .              # pide aprobación igual que la instalación
-orca plugin test .                  # pruebas de la lógica, el panel y el worker
-npx -p typescript tsc -p .          # tipos (corre antes `orca plugin types .`)
-orca plugin check .                 # pinta el panel con el worker real y con un caso inventado
-```
+## License
 
-Orca recarga el plugin cada vez que guardas un archivo y `orca plugin logs local.claude-procesos`
-muestra lo que imprime el worker. No hay paso de compilación: Orca transpila el TypeScript al
-cargarlo.
+[MIT](LICENSE)
 
-| Archivo | Qué hace |
-| --- | --- |
-| `src/procesos.ts` | Lógica pura: lee la salida de `ps` y `lsof`, agrupa por sesión, detecta huérfanos y da el veredicto. |
-| `src/sistema.ts` | Corre `ps` y `lsof`, lee `~/.claude/sessions/` y manda las señales. |
-| `src/worker.ts` | Revisa cada N segundos, guarda la memoria y actualiza el panel, la barra y las notificaciones. |
-| `src/panel.tsx` | La interfaz. |
-| `src/fixtures.ts` | Un sistema inventado para las pruebas y para `plugin check`. |
+---
 
-## Licencia
-
-MIT
+<sub>Claude and Claude Code are trademarks of Anthropic. Orca is developed by Stably AI. Procesos de Claude is an independent project and is not affiliated with or endorsed by either.</sub>
