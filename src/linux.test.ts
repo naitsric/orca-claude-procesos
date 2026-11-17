@@ -123,12 +123,12 @@ test('systemd --user adopta huérfanos como launchd', () => {
   assert.equal(vite.certeza, 'segura')
   assert.equal(vite.veredicto, 'cerrar')
   assert.equal(vite.origen?.pid, 3000)
-  assert.match(vite.motivo, /«old-app» terminó.*:5173/)
+  assert.match(vite.motivo, /“old-app” ended.*:5173/)
 
   const sola = foto.sesiones.find((x) => x.pid === 3500)!
   assert.equal(sola.veredicto, 'revisar')
-  assert.match(sola.motivo, /quedó sola/)
-  assert.equal(sola.anfitrion, 'Sin terminal')
+  assert.match(sola.motivo, /left on its own/)
+  assert.equal(sola.anfitrion, 'No terminal')
 })
 
 test('lee la CPU de /proc/<pid>/stat aunque el nombre tenga espacios y paréntesis', () => {

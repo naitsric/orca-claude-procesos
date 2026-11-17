@@ -5,8 +5,9 @@ export {}
 
 declare module 'orca' {
   interface PluginRequests {
-    /** Revisa los procesos ahora y devuelve la foto. */
-    'procesos.foto': { output: Foto }
+    /** Revisa los procesos ahora y devuelve la foto. Los paneles mandan el idioma de Orca, que el
+     *  worker no conoce. */
+    'procesos.foto': { input: { locale?: string } | undefined; output: Foto }
     /** Cierra procesos que estén en la foto actual. Con `arbol`, también sus descendientes. */
     'procesos.cerrar': {
       input: { objetivos: Objetivo[]; senal: Senal; arbol: boolean }

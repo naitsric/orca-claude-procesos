@@ -1,7 +1,8 @@
 // Lógica pura: de la salida de ps y lsof (o de /proc, en Linux) a una Foto. No toca el sistema,
 // así se prueba en Node con texto fijo. El worker (src/sistema.ts) corre los comandos y lee los
-// archivos, y le pasa lo que obtiene.
+// archivos, y le pasa lo que obtiene. Los motivos salen en el idioma actual (./i18n).
 import { carpeta, duracion, memoria as fmtMem, puertos as fmtPuertos } from './formato'
+import { idioma, t } from './i18n'
 import type { Certeza, Foto, Huerfano, Proceso, Rol, Sesion, Totales, Veredicto } from './tipos'
 
 /** Dos lecturas del mismo proceso difieren hasta ~1 s en `inicio` (sale de etime). */
@@ -377,7 +378,7 @@ export function comandoDeBash(comando: string): string | null {
 export function nombreDe(f: Fila, rol: Rol): string {
   if (rol === 'bash') {
     const cmd = comandoDeBash(f.comando)
-    return recortar(cmd ? `$ ${cmd.replace(/\s+/g, ' ')}` : 'shell de Bash', MAX_NOMBRE)
+    return recortar(cmd ? `$ ${cmd.replace(/\s+/g, ' ')}` : t().motivo.shellBash, MAX_NOMBRE)
   }
   // Un comm con espacios que no es ruta es un título de proceso (`npm exec @playwright/mcp@latest`).
   const titulo = f.comm.includes(' ') && !f.comm.startsWith('/')
@@ -568,13 +569,6 @@ export type Config = { ahora: number; horasSesionLarga: number; home: string }
 
 const ORDEN: Record<Veredicto, number> = { cerrar: 0, revisar: 1, dejar: 2 }
 
-const ETIQUETA_COMANDO: Partial<Record<Rol, string>> = {
-  bash: 'Comando',
-  comando: 'Comando',
-  servidor: 'Servidor',
-  tunel: 'Túnel'
-}
-
 function evaluarHijo(
   f: Fila,
   rol: Rol,
@@ -582,32 +576,29 @@ function evaluarHijo(
   desacoplado: boolean,
   ahora: number
 ): { veredicto: Veredicto; motivo: string } {
-  const enPuerto = puertos.length ? ` Escucha en ${fmtPuertos(puertos)}.` : ''
-  if (desacoplado) {
-    return { veredicto: 'revisar', motivo: `Se desprendió de la sesión: seguirá vivo cuando la cierres.${enPuerto}` }
-  }
+  const m = t().motivo
+  const enPuerto = puertos.length ? m.escucha(fmtPuertos(puertos)) : ''
+  if (desacoplado) return { veredicto: 'revisar', motivo: `${m.desacoplado}${enPuerto}` }
   const edad = ahora - f.inicio
   switch (rol) {
     case 'mcp':
-      return { veredicto: 'dejar', motivo: `Servidor MCP de esta sesión; se cierra con ella.${enPuerto}` }
+      return { veredicto: 'dejar', motivo: `${m.mcp}${enPuerto}` }
     case 'despierto':
-      return { veredicto: 'dejar', motivo: 'Evita que el Mac se duerma mientras Claude trabaja.' }
+      return { veredicto: 'dejar', motivo: m.despierto }
     case 'agente':
-      return { veredicto: 'dejar', motivo: 'Otra instancia de Claude lanzada desde esta sesión.' }
+      return { veredicto: 'dejar', motivo: m.agente }
     case 'navegador':
-      return { veredicto: 'dejar', motivo: 'Navegador que controla esta sesión.' }
+      return { veredicto: 'dejar', motivo: m.navegador }
     case 'bash':
     case 'comando':
     case 'servidor':
     case 'tunel': {
-      const etiqueta = ETIQUETA_COMANDO[rol]!
-      if (edad > UNA_HORA) {
-        return { veredicto: 'revisar', motivo: `${etiqueta} en segundo plano desde hace ${duracion(edad)}.${enPuerto}` }
-      }
-      return { veredicto: 'dejar', motivo: `${etiqueta} que Claude está corriendo.${enPuerto}` }
+      const etiqueta = m.etiqueta[rol]
+      if (edad > UNA_HORA) return { veredicto: 'revisar', motivo: `${m.enSegundoPlano(etiqueta, duracion(edad))}${enPuerto}` }
+      return { veredicto: 'dejar', motivo: `${m.corriendo(etiqueta)}${enPuerto}` }
     }
     default:
-      return { veredicto: 'dejar', motivo: `Proceso de esta sesión.${enPuerto}` }
+      return { veredicto: 'dejar', motivo: `${m.deLaSesion}${enPuerto}` }
   }
 }
 
@@ -619,7 +610,7 @@ function anfitrionDe(f: Fila, porPid: Map<number, Fila>): string {
     actual = porPid.get(actual.ppid)
   }
   // Sin terminal: `??` en macOS, `?` en Linux.
-  return /^\?+$/.test(f.tty) ? 'Sin terminal' : 'Otra terminal'
+  return /^\?+$/.test(f.tty) ? t().motivo.sinTerminal : t().motivo.otraTerminal
 }
 
 export function armarFoto(
@@ -632,6 +623,7 @@ export function armarFoto(
 ): { foto: Foto; memoria: Memoria } {
   const { ahora } = config
   const memoria = leerMemoria(memoriaPrevia)
+  const m = t().motivo
 
   // Roles, recorriendo de padres a hijos.
   const roles = new Map<number, Rol>()
@@ -703,29 +695,29 @@ export function armarFoto(
     const info = infoDe(infos.get(f.pid), f)
     const reanuda = /--resume[= ](\S+)/.exec(f.comando)?.[1] ?? null
     const sessionId = info?.sessionId ?? reanuda
-    const retomar = sessionId ? ` Se retoma con claude --resume ${sessionId}.` : ''
+    const retomar = sessionId ? m.retomar(sessionId) : ''
     const larga = config.horasSesionLarga * UNA_HORA
     let veredicto: Veredicto = 'dejar'
     let motivo: string
     if (a.adoptivos.has(f.ppid)) {
       veredicto = 'revisar'
-      motivo = 'Sesión sin terminal ni proceso padre: quedó sola.'
+      motivo = m.quedoSola
     } else if (info?.estado) {
       const desde = info.estadoDesde ? ahora - info.estadoDesde : null
-      const hace = desde !== null ? ` desde hace ${duracion(desde)}` : ''
+      const hace = desde !== null ? m.desde(duracion(desde)) : ''
       if (info.estado === 'busy') {
-        motivo = `Trabajando${hace}.`
+        motivo = m.trabajando(hace)
       } else if (desde !== null && desde > larga) {
         veredicto = 'revisar'
-        motivo = `Inactiva${hace}. Si ya no la usas, ciérrala para liberar ${fmtMem(rssTotalKb)}.${retomar}`
+        motivo = m.inactivaLarga(hace, fmtMem(rssTotalKb), retomar)
       } else {
-        motivo = info.estado === 'idle' ? `Esperando tu mensaje${hace}.` : `Estado «${info.estado}»${hace}.`
+        motivo = info.estado === 'idle' ? m.esperando(hace) : m.estado(info.estado, hace)
       }
     } else if (edad > larga && f.cpu < 2) {
       veredicto = 'revisar'
-      motivo = `Abierta hace ${duracion(edad)} y sin actividad ahora. Si ya no la usas, ciérrala para liberar ${fmtMem(rssTotalKb)}.${retomar}`
+      motivo = m.abiertaLarga(duracion(edad), fmtMem(rssTotalKb), retomar)
     } else {
-      motivo = f.cpu >= 2 ? `Trabajando (CPU ${Math.round(f.cpu)} %).` : 'Sesión abierta.'
+      motivo = f.cpu >= 2 ? m.trabajandoCpu(Math.round(f.cpu)) : m.abierta
     }
     return {
       pid: f.pid,
@@ -760,23 +752,23 @@ export function armarFoto(
     for (const [pid, nivel] of filas) {
       const fila = proceso(pid, nivel, false)
       const p = fila.puertos
-      const enPuerto = p.length ? ` Ocupa ${fmtPuertos(p)}.` : ''
+      const enPuerto = p.length ? m.ocupa(fmtPuertos(p)) : ''
       let veredicto: Veredicto
       let motivo: string
       if (info.certeza === 'probable') {
         veredicto = 'revisar'
-        motivo = `Parece un servidor MCP sin dueño. Puede ser de otra app (Cursor, Claude Desktop…); revísalo antes de cerrarlo.${enPuerto}`
+        motivo = `${m.mcpSinDueno}${enPuerto}`
       } else if (nivel > 0) {
         veredicto = 'cerrar'
-        motivo = `Hijo de un proceso huérfano de Claude.${enPuerto}`
+        motivo = `${m.hijoDeHuerfano}${enPuerto}`
       } else if (origen) {
         veredicto = 'cerrar'
-        const donde = origen.nombre ? ` «${origen.nombre}»` : origen.cwd ? ` en ${carpeta(origen.cwd, config.home)}` : ''
-        const cuando = origen.termino ? ` hace ${duracion(ahora - origen.termino)}` : ''
-        motivo = `Su sesión de Claude${donde} terminó${cuando} y este proceso siguió vivo.${enPuerto}`
+        const donde = origen.nombre ? m.donde(origen.nombre) : origen.cwd ? m.enCarpeta(carpeta(origen.cwd, config.home)) : ''
+        const cuando = origen.termino ? m.hace(duracion(ahora - origen.termino)) : ''
+        motivo = `${m.sesionTermino(donde, cuando)}${enPuerto}`
       } else {
         veredicto = 'cerrar'
-        motivo = `Shell de Bash de una sesión de Claude que ya no existe.${enPuerto}`
+        motivo = `${m.shellSinSesion}${enPuerto}`
       }
       huerfanos.push({
         ...fila,
@@ -843,7 +835,7 @@ export function armarFoto(
     puertosHuerfanos: [...new Set(huerfanos.flatMap((h) => h.puertos))].sort((x, y) => x - y)
   }
 
-  return { foto: { tomadaEn: ahora, home: config.home, sesiones, huerfanos, totales }, memoria }
+  return { foto: { tomadaEn: ahora, idioma: idioma(), home: config.home, sesiones, huerfanos, totales }, memoria }
 }
 
 /** Todo lo que la foto deja cerrar, por pid, con su `inicio` para validar la identidad. */

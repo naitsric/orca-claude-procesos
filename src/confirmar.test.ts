@@ -12,7 +12,7 @@ test('cerrar una sesión apunta a su claude, avisa si trabaja y dice cómo retom
   assert.equal(p.objetivos[0].pid, s.pid)
   assert.equal(p.senal, 'TERM')
   assert.ok(p.arbol, 'se cierra con todo su árbol')
-  assert.ok(p.notas.some((n) => n.tono === 'danger' && /trabajando/.test(n.texto)))
+  assert.ok(p.notas.some((n) => n.tono === 'danger' && /working now/.test(n.texto)))
   if (s.sessionId) assert.ok(p.notas.some((n) => n.texto.includes(`claude --resume ${s.sessionId}`)))
 })
 
@@ -31,14 +31,14 @@ test('el resultado cuenta los que siguieron vivos y ofrece forzarlos', () => {
   const s = f.sesiones[0]
   const r = resumirHecho({
     origen: `s${s.pid}`,
-    titulo: 'Cerré la sesión',
+    titulo: 'Closed the session',
     lista: [
       { pid: s.pid, nombre: 'claude', resultado: 'cerrado' },
       { pid: s.procesos[0].pid, nombre: s.procesos[0].nombre, resultado: 'sigue-vivo' }
     ]
   })
   assert.equal(r.todoBien, false)
-  assert.equal(r.titulo, 'Cerré 1 de 2 procesos')
+  assert.equal(r.titulo, 'Closed 1 of 2 processes')
   const forzar = confirmarForzar(`s${s.pid}`, r.vivos, f)!
   assert.equal(forzar.senal, 'KILL')
   assert.deepEqual(forzar.objetivos, [{ pid: s.procesos[0].pid, inicio: s.procesos[0].inicio }])

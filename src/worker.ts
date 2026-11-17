@@ -1,9 +1,13 @@
 // El worker del plugin. Mientras el plugin está activo Orca lo mantiene vivo (tiene un item en la
 // barra de estado), así que revisa cada N segundos, recuerda qué procesos nacieron bajo cada
 // sesión (eso es lo que delata a los huérfanos) y le avisa al panel y a la barra.
+//
+// El idioma: Orca no le dice al worker en cuál está, pero sí a los paneles. Cada panel lo manda al
+// pedir una foto; el worker lo guarda (para la barra y las notificaciones de la próxima vez) y,
+// con el ajuste `idioma`, decide en cuál salen la foto, la barra y los avisos.
 import type { JsonValue } from 'orca'
 import type { OrcaWorkerApi } from 'orca/worker'
-import { carpeta, memoria as fmtMem, plural, puertos as fmtPuertos } from './formato'
+import { carpeta, memoria as fmtMem, puertos as fmtPuertos } from './formato'
 import {
   agregarMuestra,
   historialVacio,
@@ -12,16 +16,19 @@ import {
   tomarMuestra,
   type CpuPrevia
 } from './historial'
+import { idioma, resolverIdioma, t, usarIdioma, type Idioma } from './i18n'
 import { leerMemoria, mismoProceso, type Memoria } from './procesos'
 import { cerrar, leerFilas, tomarFoto, uid, type Opciones } from './sistema'
 import type { Foto, Historial, Objetivo, ResultadoCierre, Senal } from './tipos'
 
 const CLAVE_MEMORIA = 'memoria'
 const CLAVE_HISTORIAL = 'historial'
+/** El idioma de Orca (BCP-47) que contó el último panel. */
+const CLAVE_LOCALE = 'localeOrca'
 /** El historial se guarda cada minuto, no en cada muestra. */
 const GUARDAR_CADA = Math.round(60_000 / INTERVALO_MUESTRA_MS)
 
-type Ajustes = Opciones & { intervaloSegundos: number; avisarHuerfanos: boolean }
+type Ajustes = Opciones & { intervaloSegundos: number; avisarHuerfanos: boolean; idioma: Idioma }
 
 let memoria: Memoria | null = null
 let memoriaGuardada = ''
@@ -38,18 +45,47 @@ let cpuPrevia: CpuPrevia = new Map()
 let nombres = new Map<number, string>()
 let temporizadorMuestra: ReturnType<typeof setTimeout> | null = null
 let sinGuardar = 0
+/** null hasta leerlo de storage; '' si ningún panel lo ha contado todavía (entonces, inglés). */
+let localeOrca: string | null = null
+let leyendoLocale: Promise<void> | null = null
 
 function numero(valor: unknown, porDefecto: number, min: number, max: number): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? Math.min(max, Math.max(min, valor)) : porDefecto
 }
 
+/** Una sola lectura de storage, compartida: la primera revisión y el pedido de un panel llegan a
+ *  la vez al arrancar, y una lectura tardía no debe pisar el idioma que el panel acaba de contar. */
+async function cargarLocale(orca: OrcaWorkerApi): Promise<string> {
+  leyendoLocale ??= orca.storage.get(CLAVE_LOCALE).then(
+    (guardado) => {
+      localeOrca ??= typeof guardado === 'string' ? guardado : ''
+    },
+    () => {
+      localeOrca ??= ''
+    }
+  )
+  await leyendoLocale
+  return localeOrca ?? ''
+}
+
+/** Lo que un panel dice del idioma de Orca. Se guarda solo si cambió. */
+async function anotarLocale(orca: OrcaWorkerApi, locale: unknown): Promise<void> {
+  if (typeof locale !== 'string' || !locale || locale === (await cargarLocale(orca))) return
+  localeOrca = locale
+  await orca.storage.set(CLAVE_LOCALE, locale).catch((e: unknown) => orca.log(`storage.set: ${String(e)}`))
+}
+
+/** Lee los ajustes y deja puesto el idioma que piden. */
 async function ajustes(orca: OrcaWorkerApi): Promise<Ajustes> {
   const s = await orca.settings.get().catch(() => ({}) as Record<string, JsonValue>)
-  return {
+  const op = {
     intervaloSegundos: numero(s.intervaloSegundos, 15, 5, 300),
     horasSesionLarga: numero(s.horasSesionLarga, 12, 1, 720),
-    avisarHuerfanos: s.avisarHuerfanos !== false
+    avisarHuerfanos: s.avisarHuerfanos !== false,
+    idioma: resolverIdioma(s.idioma, await cargarLocale(orca))
   }
+  usarIdioma(op.idioma)
+  return op
 }
 
 async function cargarMemoria(orca: OrcaWorkerApi): Promise<Memoria> {
@@ -71,6 +107,7 @@ function enSerie<T>(tarea: () => Promise<T>): Promise<T> {
 function fotoConError(error: unknown): Foto {
   return {
     tomadaEn: Date.now(),
+    idioma: idioma(),
     home: '',
     sesiones: [],
     huerfanos: [],
@@ -95,21 +132,22 @@ async function publicar(orca: OrcaWorkerApi, foto: Foto, nueva: Memoria | null, 
 }
 
 async function actualizarBarra(orca: OrcaWorkerApi, foto: Foto): Promise<void> {
-  const t = foto.totales
-  let text = `Claude ${t.sesiones}`
+  const tot = foto.totales
+  const tx = t()
+  let text = `Claude ${tot.sesiones}`
   let tone: 'neutral' | 'warning' | 'danger' = 'neutral'
-  let tooltip = `${plural(t.sesiones, 'sesión', 'sesiones')} · ${plural(t.procesos, 'proceso', 'procesos')} · ${fmtMem(t.rssKb)}`
+  let tooltip = `${tx.sesiones(tot.sesiones)} · ${tx.procesos(tot.procesos)} · ${fmtMem(tot.rssKb)}`
   if (foto.error) {
-    text = 'Claude: error'
+    text = tx.worker.barraError
     tone = 'danger'
-    tooltip = `No pude leer los procesos: ${foto.error}`
-  } else if (t.huerfanos) {
-    text += ` · ${plural(t.huerfanos, 'huérfano', 'huérfanos')}`
-    tone = t.huerfanosSeguros && t.puertosHuerfanos.length ? 'danger' : 'warning'
-    tooltip += `\n${plural(t.huerfanos, 'huérfano', 'huérfanos')} (${fmtMem(t.huerfanosRssKb)})`
-    if (t.puertosHuerfanos.length) tooltip += ` ocupando ${fmtPuertos(t.puertosHuerfanos)}`
+    tooltip = tx.worker.noPudeLeer(foto.error)
+  } else if (tot.huerfanos) {
+    text += ` · ${tx.huerfanos(tot.huerfanos)}`
+    tone = tot.huerfanosSeguros && tot.puertosHuerfanos.length ? 'danger' : 'warning'
+    tooltip += `\n${tx.huerfanos(tot.huerfanos)} (${fmtMem(tot.huerfanosRssKb)})`
+    if (tot.puertosHuerfanos.length) tooltip += tx.worker.ocupando(fmtPuertos(tot.puertosHuerfanos))
   }
-  tooltip += '\nClic: revisar ahora'
+  tooltip += `\n${tx.worker.clic}`
   await orca.host.call('statusBar.update', { id: 'resumen', text, tone, tooltip }).catch((e: unknown) => {
     orca.log(`statusBar.update: ${String(e)}`)
   })
@@ -123,10 +161,9 @@ async function avisar(orca: OrcaWorkerApi, foto: Foto): Promise<void> {
   if (!nuevos.length) return
   const nombres = nuevos.slice(0, 3).map((h) => h.nombre).join(', ') + (nuevos.length > 3 ? '…' : '')
   const puertos = [...new Set(nuevos.flatMap((h) => h.puertos))]
-  const body =
-    `${plural(nuevos.length, 'proceso de Claude siguió vivo', 'procesos de Claude siguieron vivos')} tras cerrar su sesión: ${nombres}.` +
-    (puertos.length ? ` Ocupan ${fmtPuertos(puertos)}.` : '')
-  await orca.host.call('notifications.show', { title: 'Procesos de Claude', body }).catch((e: unknown) => {
+  const tx = t()
+  const body = tx.worker.sobrevivieron(nuevos.length, nombres) + (puertos.length ? tx.worker.ocupan(nuevos.length, fmtPuertos(puertos)) : '')
+  await orca.host.call('notifications.show', { title: tx.nombrePlugin, body }).catch((e: unknown) => {
     orca.log(`notifications.show: ${String(e)}`)
   })
 }
@@ -163,21 +200,17 @@ function cerrarProcesos(
 }
 
 function resumen(foto: Foto): string {
-  if (foto.error) return `No pude leer los procesos: ${foto.error}`
-  const t = foto.totales
-  const partes = [
-    `${plural(t.sesiones, 'sesión', 'sesiones')} de Claude, ${plural(t.procesos, 'proceso', 'procesos')}, ${fmtMem(t.rssKb)}.`
-  ]
-  if (t.huerfanos) {
-    partes.push(
-      `${plural(t.huerfanos, 'huérfano', 'huérfanos')} (${t.huerfanosSeguros} seguros, ${fmtMem(t.huerfanosRssKb)})` +
-        (t.puertosHuerfanos.length ? ` en ${fmtPuertos(t.puertosHuerfanos)}.` : '.')
-    )
+  const w = t().worker
+  if (foto.error) return w.noPudeLeer(foto.error)
+  const tot = foto.totales
+  const partes = [w.resumen(tot.sesiones, tot.procesos, fmtMem(tot.rssKb))]
+  if (tot.huerfanos) {
+    partes.push(w.resumenHuerfanos(tot.huerfanos, tot.huerfanosSeguros, fmtMem(tot.huerfanosRssKb), fmtPuertos(tot.puertosHuerfanos)))
   } else {
-    partes.push('Sin huérfanos.')
+    partes.push(w.sinHuerfanos)
   }
   const revisar = foto.sesiones.filter((s) => s.veredicto !== 'dejar').length
-  if (revisar) partes.push(`${plural(revisar, 'sesión para revisar', 'sesiones para revisar')}.`)
+  if (revisar) partes.push(w.paraRevisar(revisar))
   return partes.join(' ')
 }
 
@@ -228,7 +261,12 @@ async function ciclo(orca: OrcaWorkerApi): Promise<void> {
 
 export default function activate(orca: OrcaWorkerApi): void {
   detenido = false
-  orca.panels.handle('procesos.foto', () => revisar(orca))
+  localeOrca = null
+  leyendoLocale = null
+  orca.panels.handle('procesos.foto', async (pedido) => {
+    await anotarLocale(orca, pedido?.locale)
+    return revisar(orca)
+  })
   orca.panels.handle('procesos.cerrar', ({ objetivos, senal, arbol }) => cerrarProcesos(orca, objetivos, senal, arbol))
   orca.panels.handle('procesos.historial', async () => (await cargarHistorial(orca)) ?? historialVacio())
 
@@ -238,15 +276,16 @@ export default function activate(orca: OrcaWorkerApi): void {
     const objetivos = foto.huerfanos
       .filter((h) => h.certeza === 'segura' && h.nivel === 0)
       .map((h) => ({ pid: h.pid, inicio: h.inicio }))
-    if (!objetivos.length) return 'No hay huérfanos seguros que cerrar.'
+    if (!objetivos.length) return t().worker.nadaQueCerrar
     const { resultados } = await cerrarProcesos(orca, objetivos, 'TERM', true)
     const cerrados = resultados.filter((r) => r.resultado === 'cerrado').length
     const vivos = resultados.filter((r) => r.resultado === 'sigue-vivo').map((r) => r.nombre)
-    return `Cerré ${plural(cerrados, 'proceso', 'procesos')}.` + (vivos.length ? ` Siguen vivos: ${vivos.join(', ')}.` : '')
+    return t().worker.cerre(cerrados) + (vivos.length ? t().worker.siguenVivos(vivos.join(', ')) : '')
   })
 
+  // Revisa enseguida: si cambió el idioma, los paneles y la barra lo toman de la nueva foto.
   orca.settings.onDidChange(() => {
-    void ajustes(orca).then((op) => programar(orca, op.intervaloSegundos))
+    void ciclo(orca)
   })
 
   void ciclo(orca)

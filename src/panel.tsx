@@ -11,6 +11,7 @@ import {
   Code,
   Collapsible,
   EmptyState,
+  env,
   Heading,
   IconButton,
   KeyValue,
@@ -45,9 +46,9 @@ import {
   type Hecho,
   type Pendiente
 } from './confirmar'
-import { abreviarRuta, carpeta, duracion, memoria, plural, puertos } from './formato'
-import type { Foto, Huerfano, Proceso, Sesion, Veredicto } from './tipos'
-
+import { abreviarRuta, carpeta, duracion, memoria, porcentaje, puertos } from './formato'
+import { idiomaDeLocale, t, usarIdioma } from './i18n'
+import type { Foto, Huerfano, Proceso, Sesion } from './tipos'
 
 const foto = atom<Foto | null>(null)
 const falloPedido = atom<string | null>(null)
@@ -61,15 +62,19 @@ const abiertas = atom<Record<string, boolean>>({})
 const pestana = atom('pestana', 'sesiones', { persist: 'plugin' })
 const soloRevisar = atom('soloRevisar', false, { persist: 'plugin' })
 
-const ESTADO: Record<Veredicto, string> = { cerrar: 'Cerrar', revisar: 'Revisar', dejar: 'Dejar' }
-
 function mensaje(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Los textos van en el idioma de la foto, el mismo de los motivos que calculó el worker. */
+function recibir(f: Foto): void {
+  usarIdioma(f.idioma)
+  set(foto, f)
+}
+
 async function refrescar(): Promise<void> {
   try {
-    set(foto, await plugin.request('procesos.foto', undefined, { timeoutMs: 60_000 }))
+    recibir(await plugin.request('procesos.foto', { locale: env.locale }, { timeoutMs: 60_000 }))
     set(falloPedido, null)
   } catch (error) {
     set(falloPedido, mensaje(error))
@@ -85,7 +90,7 @@ async function ejecutar(p: Pendiente): Promise<void> {
       { objetivos: p.objetivos, senal: p.senal, arbol: p.arbol },
       { timeoutMs: 60_000 }
     )
-    set(foto, respuesta.foto)
+    recibir(respuesta.foto)
     set(hecho, { origen: p.origen, titulo: p.hecho, lista: respuesta.resultados })
     set(seleccion, {})
   } catch (error) {
@@ -96,7 +101,9 @@ async function ejecutar(p: Pendiente): Promise<void> {
 }
 
 export function setup(ctx: PanelContext): void {
-  ctx.subscriptions.push(plugin.on('procesos.foto', (f) => set(foto, f)))
+  // Hasta la primera foto, el idioma de Orca.
+  usarIdioma(idiomaDeLocale(env.locale))
+  ctx.subscriptions.push(plugin.on('procesos.foto', recibir))
   void refrescar()
 }
 
@@ -161,11 +168,11 @@ function Resultado(props: { h: Hecho; f: Foto | null }) {
         <Row gap="xs">
           {r.vivos.length ? (
             <Button size="sm" tone="danger" onPress={() => pedir(confirmarForzar(h.origen, r.vivos, props.f))}>
-              Forzar cierre
+              {t().panel.forzar}
             </Button>
           ) : null}
           <Button size="sm" variant="ghost" onPress={() => set(hecho, null)}>
-            Listo
+            {t().panel.listo}
           </Button>
         </Row>
       </Stack>
@@ -179,9 +186,9 @@ function Accion(props: { origen: string }) {
   if (read(cerrando) === props.origen) {
     return (
       <Row gap="xs" align="center">
-        <Spinner label="Cerrando" labelHidden />
+        <Spinner label={t().panel.cerrando} labelHidden />
         <Text size="sm" muted>
-          Cerrando…
+          {t().panel.cerrandoPuntos}
         </Text>
       </Row>
     )
@@ -194,17 +201,20 @@ function Accion(props: { origen: string }) {
 // ---------------------------------------------------------------------------------------------
 // Piezas
 
-const COLUMNAS: readonly TableColumn[] = [
-  { key: 'proceso', label: 'Proceso', minWidth: 'sm' },
-  { key: 'estado', label: 'Estado', width: 'xs' },
-  { key: 'mem', label: 'Memoria', width: 'xs', align: 'end' },
-  { key: 'edad', label: 'Tiempo', width: 'xs', align: 'end', hideBelow: 'sm' }
-]
+function columnas(): readonly TableColumn[] {
+  const c = t().panel.columnas
+  return [
+    { key: 'proceso', label: c.proceso, minWidth: 'sm' },
+    { key: 'estado', label: c.estado, width: 'xs' },
+    { key: 'mem', label: c.mem, width: 'xs', align: 'end' },
+    { key: 'edad', label: c.edad, width: 'xs', align: 'end', hideBelow: 'sm' }
+  ]
+}
 
 function fila(p: Proceso | Huerfano): TableRow {
   const sangria = p.nivel > 0 ? `${'  '.repeat(p.nivel - 1)}└ ` : ''
   const enPuerto = p.puertos.length ? ` ${puertos(p.puertos)}` : ''
-  const estado = 'certeza' in p && p.certeza === 'probable' ? 'Revisar (?)' : ESTADO[p.veredicto]
+  const estado = 'certeza' in p && p.certeza === 'probable' ? t().panel.revisarDudoso : t().veredictos[p.veredicto]
   return {
     key: String(p.pid),
     cells: {
@@ -228,11 +238,15 @@ function Detalles(props: { lista: readonly (Proceso | Huerfano)[]; home: string 
           <Text size="sm" tone={p.veredicto === 'cerrar' ? 'danger' : p.veredicto === 'revisar' ? 'warning' : undefined}>
             {p.motivo}
           </Text>
-          {'cwd' in p && p.cwd ? <Text muted size="xs">Carpeta: {abreviarRuta(p.cwd, props.home)}</Text> : null}
+          {'cwd' in p && p.cwd ? (
+            <Text muted size="xs">
+              {t().panel.carpeta}: {abreviarRuta(p.cwd, props.home)}
+            </Text>
+          ) : null}
           <Code block>{p.comando}</Code>
         </Stack>
       ))}
-      {props.lista.length > 3 ? <Text muted size="xs">y {props.lista.length - 3} más…</Text> : null}
+      {props.lista.length > 3 ? <Text muted size="xs">{t().panel.yMas(props.lista.length - 3)}</Text> : null}
     </Stack>
   )
 }
@@ -248,6 +262,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
   const sobran = s.procesos.filter((p) => p.veredicto === 'cerrar')
   // Con una confirmación pendiente la tarjeta se queda abierta: es donde está la pregunta.
   const abierta = (read(abiertas)[clave] ?? false) || activo(clave)
+  const tx = t()
   return (
     <Collapsible
       title={`${aviso ? '⚠ ' : ''}${nombreSesion(s, home)}`}
@@ -255,7 +270,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
         s.nombre ? carpeta(s.cwd, home) : null,
         estadoCorto(s, ahora),
         memoria(s.rssTotalKb),
-        plural(s.procesos.length, 'proceso', 'procesos')
+        tx.procesos(s.procesos.length)
       ]
         .filter(Boolean)
         .join(' · ')}
@@ -269,17 +284,17 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
         <KeyValue
           items={[
             { label: 'pid', value: s.pid, code: true },
-            { label: 'Carpeta', value: abreviarRuta(s.cwd, home), code: true },
-            { label: 'Terminal', value: `${s.anfitrion} (${s.tty})` },
-            { label: 'Abierta', value: `hace ${duracion(ahora - s.inicio)}` },
-            { label: 'CPU', value: `${s.cpu.toFixed(1).replace('.', ',')} %` },
+            { label: tx.panel.carpeta, value: abreviarRuta(s.cwd, home), code: true },
+            { label: tx.panel.terminal, value: `${s.anfitrion} (${s.tty})` },
+            { label: tx.panel.abierta, value: tx.panel.hace(duracion(ahora - s.inicio)) },
+            { label: 'CPU', value: porcentaje(s.cpu, 1) },
             ...(s.sessionId ? [{ label: '--resume', value: s.sessionId, code: true }] : [])
           ]}
         />
         {visibles.length ? (
           <Table
-            label={`Procesos de la sesión ${s.pid}`}
-            columns={COLUMNAS}
+            label={tx.panel.procesosDeSesion(s.pid)}
+            columns={columnas()}
             rows={visibles.map(fila)}
             selectionMode="multiple"
             selected={[...marcados].filter((k) => visibles.some((p) => String(p.pid) === k))}
@@ -288,7 +303,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
           />
         ) : (
           <Text muted size="sm">
-            {s.procesos.length ? 'Todos sus procesos están bien.' : 'No tiene procesos hijos.'}
+            {s.procesos.length ? tx.panel.todosBien : tx.panel.sinHijos}
           </Text>
         )}
         <Detalles lista={elegidos} home={home} />
@@ -302,7 +317,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
               disabled={!elegidos.length || ocupado}
               onPress={() => pedir(confirmarDeSesion(s, elegidos, home))}
             >
-              {elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados'}
+              {tx.panel.cerrarSeleccionados(elegidos.length)}
             </Button>
             {sobran.length ? (
               <Button
@@ -311,7 +326,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
                 disabled={ocupado}
                 onPress={() => update(seleccion, (sel) => ({ ...sel, [clave]: sobran.map((p) => String(p.pid)) }))}
               >
-                Marcar los que sobran
+                {tx.panel.marcarSobran}
               </Button>
             ) : null}
             <Button
@@ -322,7 +337,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
               disabled={ocupado}
               onPress={() => pedir(confirmarSesion(s, home, ahora))}
             >
-              Cerrar sesión
+              {tx.panel.cerrarSesion}
             </Button>
           </Row>
         )}
@@ -340,17 +355,18 @@ function PestanaSesiones(props: { f: Foto; ocupado: boolean }) {
   // Una sesión cerrada desaparece de la lista; su resultado queda arriba de la lista.
   const h = read(hecho)
   const huerfano = h && h.origen.startsWith('s') && !f.sesiones.some((s) => `s${s.pid}` === h.origen) ? h.origen : null
+  const tx = t().panel
   return (
     <Stack gap="sm">
-      <Switch label="Solo lo que hay que revisar" checked={filtrar} onChange={(v) => set(soloRevisar, v)} />
+      <Switch label={tx.soloRevisar} checked={filtrar} onChange={(v) => set(soloRevisar, v)} />
       {huerfano ? <Accion origen={huerfano} /> : null}
       {sesiones.length ? (
         sesiones.map((s) => <TarjetaSesion sesion={s} home={f.home} filtrar={filtrar} ocupado={ocupado} />)
       ) : (
         <EmptyState
           icon="check"
-          title={f.sesiones.length ? 'Nada que revisar' : 'No hay sesiones de Claude'}
-          description={f.sesiones.length ? 'Todas las sesiones y sus procesos están en uso.' : 'Ningún proceso claude está corriendo.'}
+          title={f.sesiones.length ? tx.nadaQueRevisar : tx.sinSesiones}
+          description={f.sesiones.length ? tx.todoEnUso : tx.ningunClaude}
         />
       )}
     </Stack>
@@ -359,11 +375,12 @@ function PestanaSesiones(props: { f: Foto; ocupado: boolean }) {
 
 function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
   const { f, ocupado } = props
+  const tx = t().panel
   if (!f.huerfanos.length) {
     return (
       <Stack gap="sm">
         <Accion origen="huerfanos" />
-        <EmptyState icon="check" title="Sin huérfanos" description="Ningún proceso de Claude sobrevivió a su sesión." />
+        <EmptyState icon="check" title={tx.sinHuerfanos} description={tx.ningunoSobrevivio} />
       </Stack>
     )
   }
@@ -373,11 +390,11 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
   return (
     <Stack gap="sm">
       <Text muted size="sm">
-        «Revisar (?)» es un servidor MCP suelto que puede ser de otra app. Los demás nacieron bajo una sesión de Claude que ya terminó.
+        {tx.explicaDudoso}
       </Text>
       <Table
-        label="Procesos huérfanos"
-        columns={COLUMNAS}
+        label={tx.huerfanosTabla}
+        columns={columnas()}
         rows={f.huerfanos.map(fila)}
         selectionMode="multiple"
         selected={[...marcados].filter((k) => f.huerfanos.some((h) => String(h.pid) === k))}
@@ -395,7 +412,7 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
             disabled={!elegidos.length || ocupado}
             onPress={() => pedir(confirmarHuerfanos('huerfanos', elegidos, f.huerfanos, f.home))}
           >
-            {elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados'}
+            {tx.cerrarSeleccionados(elegidos.length)}
           </Button>
           <Button
             size="sm"
@@ -403,7 +420,7 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
             disabled={!seguros.length}
             onPress={() => update(seleccion, (sel) => ({ ...sel, huerfanos: seguros.map((h) => String(h.pid)) }))}
           >
-            Marcar los seguros
+            {tx.marcarSeguros}
           </Button>
         </Row>
       )}
@@ -415,16 +432,14 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
 function AvisoHuerfanos(props: { f: Foto; ocupado: boolean }) {
   const { f, ocupado } = props
   if (activo('aviso')) return <Accion origen="aviso" />
-  const t = f.totales
+  const tot = f.totales
   const seguros = huerfanosSeguros(f)
   if (!seguros.length) return null
+  const tx = t()
   return (
-    <Callout tone="danger" title={plural(t.huerfanosSeguros, 'proceso huérfano', 'procesos huérfanos')} icon="warning">
+    <Callout tone="danger" title={tx.procesosHuerfanos(tot.huerfanosSeguros)} icon="warning">
       <Stack gap="sm">
-        <Text size="sm">
-          Siguieron vivos después de cerrar su sesión de Claude. Ocupan {memoria(t.huerfanosRssKb)}
-          {t.puertosHuerfanos.length ? ` y ${puertos(t.puertosHuerfanos)}` : ''}.
-        </Text>
+        <Text size="sm">{tx.panel.siguieronVivos(memoria(tot.huerfanosRssKb), puertos(tot.puertosHuerfanos))}</Text>
         <Row gap="xs">
           <Button
             size="sm"
@@ -432,10 +447,10 @@ function AvisoHuerfanos(props: { f: Foto; ocupado: boolean }) {
             disabled={ocupado}
             onPress={() => pedir(confirmarHuerfanos('aviso', seguros, f.huerfanos, f.home))}
           >
-            {t.huerfanosSeguros === 1 ? 'Cerrarlo' : 'Cerrar todos'}
+            {tot.huerfanosSeguros === 1 ? tx.panel.cerrarlo : tx.panel.cerrarTodos}
           </Button>
           <Button size="sm" variant="ghost" onPress={() => set(pestana, 'huerfanos')}>
-            Ver
+            {tx.panel.ver}
           </Button>
         </Row>
       </Stack>
@@ -447,29 +462,30 @@ export default function Panel() {
   const f = read(foto)
   const fallo = read(falloPedido)
   const ocupado = read(cerrando) !== null
-  const t = f?.totales
+  const tot = f?.totales
+  const tx = t()
 
   return (
     <Stack gap="md">
       <Row justify="between" align="center">
-        <Heading level={2}>Procesos de Claude</Heading>
-        <IconButton icon="refresh" label="Revisar ahora" disabled={ocupado} onPress={refrescar} />
+        <Heading level={2}>{tx.nombrePlugin}</Heading>
+        <IconButton icon="refresh" label={tx.panel.revisarAhora} disabled={ocupado} onPress={refrescar} />
       </Row>
 
-      {f && t && !f.error ? (
+      {f && tot && !f.error ? (
         <Text muted size="xs">
-          {plural(t.sesiones, 'sesión', 'sesiones')} · {plural(t.procesos, 'proceso', 'procesos')} · {memoria(t.rssKb)} · revisado{' '}
+          {tx.sesiones(tot.sesiones)} · {tx.procesos(tot.procesos)} · {memoria(tot.rssKb)} · {tx.panel.revisado}{' '}
           <RelativeTime at={f.tomadaEn} format="short" />
         </Text>
       ) : null}
 
       {fallo ? (
-        <Callout tone="danger" title="El worker no respondió" icon="error">
+        <Callout tone="danger" title={tx.panel.workerNoRespondio} icon="error">
           {fallo}
         </Callout>
       ) : null}
       {f?.error ? (
-        <Callout tone="danger" title="No pude leer los procesos" icon="error">
+        <Callout tone="danger" title={tx.panel.noPudeLeer} icon="error">
           {f.error}
         </Callout>
       ) : null}
@@ -477,13 +493,13 @@ export default function Panel() {
       {f && !f.error ? <AvisoHuerfanos f={f} ocupado={ocupado} /> : null}
 
       {!f ? (
-        fallo ? null : <Skeleton lines={4} label="Revisando procesos" />
+        fallo ? null : <Skeleton lines={4} label={tx.panel.revisando} />
       ) : (
-        <Tabs label="Vista" value={read(pestana)} onChange={(v) => set(pestana, v)}>
-          <Tab value="sesiones" label={`Sesiones (${f.sesiones.length})`} icon="agent">
+        <Tabs label={tx.panel.vista} value={read(pestana)} onChange={(v) => set(pestana, v)}>
+          <Tab value="sesiones" label={tx.panel.pestanaSesiones(f.sesiones.length)} icon="agent">
             <PestanaSesiones f={f} ocupado={ocupado} />
           </Tab>
-          <Tab value="huerfanos" label={`Huérfanos (${f.huerfanos.length})`} icon="warning">
+          <Tab value="huerfanos" label={tx.panel.pestanaHuerfanos(f.huerfanos.length)} icon="warning">
             <PestanaHuerfanos f={f} ocupado={ocupado} />
           </Tab>
         </Tabs>

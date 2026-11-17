@@ -45,9 +45,9 @@ function hostCon(foto: Foto, pedidos: Pedido[] = []) {
 
 test('muestra el resumen, las sesiones y el aviso de huérfanos', async () => {
   const view = await mount(panel, { host: hostCon(fotoDePrueba()) })
-  assert.match(view.summary().join('\n'), /4 procesos huérfanos/)
-  assert.ok(view.find({ text: 'Sesiones (1)' }))
-  assert.ok(view.find({ text: 'Huérfanos (5)' }))
+  assert.match(view.summary().join('\n'), /4 orphaned processes/)
+  assert.ok(view.find({ text: 'Sessions (1)' }))
+  assert.ok(view.find({ text: 'Orphans (5)' }))
   assert.ok(texto(view.tree()).includes('"title":"⚠ mi-app-c7"'), 'la sesión se ve con su nombre')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
@@ -58,19 +58,19 @@ test('muestra el resumen, las sesiones y el aviso de huérfanos', async () => {
 test('el aviso de huérfanos pregunta en su lugar, con la lista de lo que cierra', async () => {
   const pedidos: Pedido[] = []
   const view = await mount(panel, { host: hostCon(fotoDePrueba(), pedidos) })
-  await view.press({ text: 'Cerrar todos' })
+  await view.press({ text: 'Close all' })
   const arbol = texto(view.tree())
-  assert.match(view.summary().join('\n'), /¿Cerrar 2 procesos huérfanos\?/)
-  assert.ok(arbol.includes('mcp-grafana · de «old» · 29 MB'), 'dice de qué sesión viene')
-  assert.ok(arbol.includes('Libera :15432.'), 'dice qué puerto libera')
-  assert.ok(arbol.includes('Con ellos se cierran 2 procesos hijos.'))
+  assert.match(view.summary().join('\n'), /Close 2 orphaned processes\?/)
+  assert.ok(arbol.includes('mcp-grafana · from “old” · 29 MB'), 'dice de qué sesión viene')
+  assert.ok(arbol.includes('Frees :15432.'), 'dice qué puerto libera')
+  assert.ok(arbol.includes('2 child processes close with them.'))
   assert.ok(
-    arbol.indexOf('¿Cerrar 2 procesos huérfanos?') < arbol.indexOf('"type":"Tabs"'),
+    arbol.indexOf('Close 2 orphaned processes?') < arbol.indexOf('"type":"Tabs"'),
     'sale donde estaba el aviso, arriba de las pestañas'
   )
   assert.equal(pedidos.length, 0, 'nada se cierra sin confirmar')
 
-  await view.press({ text: 'Cerrar 2 procesos' })
+  await view.press({ text: 'Close 2 processes' })
   assert.equal(pedidos.length, 1)
   assert.deepEqual(
     pedidos[0].objetivos.map((o) => o.pid),
@@ -79,9 +79,9 @@ test('el aviso de huérfanos pregunta en su lugar, con la lista de lo que cierra
   )
   assert.equal(pedidos[0].arbol, true)
   assert.equal(pedidos[0].senal, 'TERM')
-  assert.match(view.summary().join('\n'), /Cerré 4 procesos/)
-  await view.press({ text: 'Listo' })
-  assert.ok(!texto(view.tree()).includes('Cerré'))
+  assert.match(view.summary().join('\n'), /Closed 4 processes/)
+  await view.press({ text: 'Done' })
+  assert.ok(!texto(view.tree()).includes('Closed 4'))
   assert.deepEqual(view.errors, [])
   await view.unmount()
 })
@@ -90,18 +90,18 @@ test('cerrar una sesión pregunta dentro de su tarjeta', async () => {
   const pedidos: Pedido[] = []
   const view = await mount(panel, { host: hostCon(fotoDePrueba(), pedidos) })
   await view.toggle({ type: 'Collapsible' })
-  await view.press({ text: 'Cerrar sesión' })
+  await view.press({ text: 'Close session' })
   const tarjeta = texto(buscar(view.tree(), 'Collapsible'))
-  assert.ok(tarjeta.includes('¿Cerrar la sesión «mi-app-c7»?'), 'la pregunta está dentro de la tarjeta')
-  assert.ok(tarjeta.includes('Se cierran 7 procesos'))
-  assert.ok(tarjeta.includes('3 servidores MCP'), 'agrupa por tipo')
-  assert.ok(tarjeta.includes('Está inactiva desde hace 20 h.'))
+  assert.ok(tarjeta.includes('Close the session “mi-app-c7”?'), 'la pregunta está dentro de la tarjeta')
+  assert.ok(tarjeta.includes('Closing 7 processes'))
+  assert.ok(tarjeta.includes('3 MCP servers'), 'agrupa por tipo')
+  assert.ok(tarjeta.includes('It has been idle for 20 h.'))
   assert.ok(tarjeta.includes('claude --resume 0f3c2a9e-5b1d-4c7a-9e2f-7a6b5c4d3e21'))
-  assert.ok(tarjeta.includes('Libera :5173.'))
+  assert.ok(tarjeta.includes('Frees :5173.'))
 
-  await view.press({ text: 'Mantenerla abierta' })
+  await view.press({ text: 'Keep it open' })
   assert.equal(pedidos.length, 0)
-  assert.ok(!texto(view.tree()).includes('¿Cerrar la sesión'))
+  assert.ok(!texto(view.tree()).includes('Close the session'))
   assert.deepEqual(view.errors, [])
   await view.unmount()
 })
@@ -117,12 +117,12 @@ test('cerrar solo los procesos que sobran deja la sesión abierta', async () => 
   const pedidos: Pedido[] = []
   const view = await mount(panel, { host: hostCon(conSobra, pedidos) })
   await view.toggle({ type: 'Collapsible' })
-  await view.press({ text: 'Marcar los que sobran' })
-  await view.press({ text: 'Cerrar 1 seleccionado' })
+  await view.press({ text: 'Select unneeded' })
+  await view.press({ text: 'Close 1 selected' })
   const tarjeta = texto(buscar(view.tree(), 'Collapsible'))
-  assert.ok(tarjeta.includes('¿Cerrar 1 proceso de «mi-app-c7»?'))
-  assert.ok(tarjeta.includes('La sesión sigue abierta.'))
-  await view.press({ text: 'Cerrar 1 proceso' })
+  assert.ok(tarjeta.includes('Close 1 process of “mi-app-c7”?'))
+  assert.ok(tarjeta.includes('The session stays open.'))
+  await view.press({ text: 'Close 1 process' })
   assert.equal(pedidos.length, 1)
   assert.deepEqual(pedidos[0].objetivos.map((o) => o.pid), [sobra.pid], 'solo el que sobra, no la sesión')
   assert.ok(!pedidos[0].objetivos.some((o) => o.pid === s.pid))
@@ -133,10 +133,10 @@ test('cerrar solo los procesos que sobran deja la sesión abierta', async () => 
 test('cancelar no cierra nada', async () => {
   const pedidos: Pedido[] = []
   const view = await mount(panel, { host: hostCon(fotoDePrueba(), pedidos) })
-  await view.press({ text: 'Cerrar todos' })
-  await view.press({ text: 'Cancelar' })
+  await view.press({ text: 'Close all' })
+  await view.press({ text: 'Cancel' })
   assert.equal(pedidos.length, 0)
-  assert.ok(!/¿Cerrar/.test(view.summary().join('\n')))
+  assert.ok(!/Close 2 orphaned processes\?/.test(view.summary().join('\n')))
   await view.unmount()
 })
 
@@ -149,6 +149,6 @@ test('si el worker falla lo dice', async () => {
     }
   })
   const view = await mount(panel, { host })
-  assert.match(view.summary().join('\n'), /El worker no respondió/)
+  assert.match(view.summary().join('\n'), /The worker didn't respond/)
   await view.unmount()
 })

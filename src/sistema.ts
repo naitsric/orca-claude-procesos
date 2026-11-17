@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process'
 import { access, readdir, readFile, readlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { t } from './i18n'
 import {
   agrupar,
   COLUMNAS_PS,
@@ -40,7 +41,7 @@ function correr(comando: string, args: readonly string[], timeout = 15_000): Pro
       (error, stdout) => {
         if (error && (typeof error.code !== 'number' || !stdout)) {
           if (typeof error.code === 'number') resolve('')
-          else if (error.code === 'ENOENT') reject(new Error(`No encontré ${comando}${LINUX ? ' (viene en el paquete procps)' : ''}.`))
+          else if (error.code === 'ENOENT') reject(new Error(t().sistema.noEncontre(comando, LINUX)))
           else reject(error)
           return
         }
@@ -225,10 +226,10 @@ export async function cerrar(
         pid: o.pid,
         nombre: info?.nombre ?? `pid ${o.pid}`,
         resultado: 'rechazado',
-        detalle: 'Ya no aparece como proceso de Claude.'
+        detalle: t().sistema.yaNoEsDeClaude
       })
     } else if (!mismoProceso(info.inicio, o.inicio)) {
-      resultados.push({ pid: o.pid, nombre: info.nombre, resultado: 'rechazado', detalle: 'Ese pid ya es de otro proceso.' })
+      resultados.push({ pid: o.pid, nombre: info.nombre, resultado: 'rechazado', detalle: t().sistema.otroProceso })
     } else if (!primera.includes(o.pid)) {
       primera.push(o.pid)
     }

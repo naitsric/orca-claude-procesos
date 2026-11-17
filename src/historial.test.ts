@@ -93,5 +93,5 @@ test('el eje de memoria cae en MB o GB redondos', () => {
   const gb = 1024 * 1024
   assert.deepEqual(marcasMemoria(1.6 * gb, 3).map(etiquetaMemoria), ['0', '1 GB', '2 GB'])
   assert.deepEqual(marcasMemoria(700 * 1024, 3).map(etiquetaMemoria), ['0', '500 MB', '1000 MB'])
-  assert.equal(etiquetaMemoria(1.5 * gb), '1,5 GB')
+  assert.equal(etiquetaMemoria(1.5 * gb), '1.5 GB')
 })

@@ -1,10 +1,22 @@
-// Formatos en español que usan el worker (motivos, barra de estado) y el panel.
+// Formatos que usan el worker (motivos, barra de estado) y los paneles, en el idioma actual
+// (./i18n): cambia el separador decimal y el espacio antes de %.
+import { t } from './i18n'
+
+/** `n` con `digitos` decimales y el separador del idioma: "1.5" o "1,5". */
+export function decimal(n: number, digitos: number): string {
+  return n.toFixed(digitos).replace('.', t().coma)
+}
+
+/** "25%" o "25 %", sin decimales salvo que se pidan. */
+export function porcentaje(n: number, digitos = 0): string {
+  return t().porcentaje(digitos ? decimal(n, digitos) : String(Math.round(n)))
+}
 
 export function memoria(kb: number): string {
   if (kb < 1024) return `${Math.round(kb)} KB`
   const mb = kb / 1024
   if (mb < 1024) return `${Math.round(mb)} MB`
-  return `${(mb / 1024).toFixed(1).replace('.', ',')} GB`
+  return `${decimal(mb / 1024, 1)} GB`
 }
 
 /** "45 s", "12 min", "3 h", "2 d": la unidad más grande que cabe, sin decimales. */

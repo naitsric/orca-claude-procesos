@@ -93,7 +93,7 @@ test('encuentra los huérfanos y dice de dónde vienen', () => {
   assert.equal(grafana.certeza, 'segura')
   assert.equal(grafana.veredicto, 'cerrar')
   assert.equal(grafana.origen?.pid, 5000)
-  assert.match(grafana.motivo, /old terminó hace 1 h/)
+  assert.match(grafana.motivo, /old ended 1 h ago/)
   assert.equal(hijo.nivel, 1)
   assert.equal(hijo.veredicto, 'cerrar')
 
@@ -151,7 +151,7 @@ test('usa el nombre y el estado que publica Claude Code', () => {
   assert.equal(s.sessionId, '0f3c2a9e-5b1d-4c7a-9e2f-7a6b5c4d3e21')
   assert.equal(s.estado, 'idle')
   assert.equal(s.veredicto, 'revisar', 'inactiva 20 h con un umbral de 12 h')
-  assert.match(s.motivo, /Inactiva desde hace 20 h/)
+  assert.match(s.motivo, /Idle for 20 h/)
   assert.match(s.motivo, /claude --resume 0f3c2a9e/)
   assert.equal(memoria.sesiones[Object.keys(memoria.sesiones).find((k) => k.startsWith('4129@'))!].nombre, 'mi-app-c7')
 })
@@ -161,7 +161,7 @@ test('una sesión trabajando se deja aunque lleve horas abierta', () => {
   infos.set(4129, { ...infos.get(4129)!, estado: 'busy', estadoDesde: AHORA - 60_000 })
   const s = revisarFixture(memoriaVacia(), { infos }).foto.sesiones[0]
   assert.equal(s.veredicto, 'dejar')
-  assert.equal(s.motivo, 'Trabajando desde hace 1 min.')
+  assert.equal(s.motivo, 'Working for 1 min.')
 })
 
 test('ignora el archivo de sesión de otro proceso que tuvo el mismo pid', () => {

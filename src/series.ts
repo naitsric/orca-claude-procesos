@@ -1,4 +1,6 @@
 // Del historial a series apiladas para las gráficas. Puro: lo usa el panel y se prueba en Node.
+import { decimal } from './formato'
+import { t as textos } from './i18n'
 import type { Historial } from './tipos'
 
 /** Índice de paleta (0–4), «otras» o «huerfanos». */
@@ -24,7 +26,7 @@ export function construirSeries(h: Historial, desde: number, medida: Medida): Da
 
   const series: Serie[] = []
   const huerfanos = muestras.map((m) => (medida === 'cpu' ? m.huerfanosCpu : m.huerfanosRssKb))
-  if (huerfanos.some((v) => v > 0)) series.push({ clave: 'huerfanos', nombre: 'Huérfanos', color: 'huerfanos', valores: huerfanos })
+  if (huerfanos.some((v) => v > 0)) series.push({ clave: 'huerfanos', nombre: textos().actividad.huerfanosSerie, color: 'huerfanos', valores: huerfanos })
   for (const clave of conColor) {
     series.push({
       clave,
@@ -36,7 +38,7 @@ export function construirSeries(h: Historial, desde: number, medida: Medida): Da
   if (otras.length) {
     series.push({
       clave: 'otras',
-      nombre: otras.length === 1 ? nombres.get(otras[0])! : `Otras ${otras.length} sesiones`,
+      nombre: otras.length === 1 ? nombres.get(otras[0])! : textos().actividad.otrasSesiones(otras.length),
       color: 'otras',
       valores: muestras.map((m) =>
         m.sesiones.filter((s) => otras.includes(s.clave)).reduce((n, s) => n + s[medida], 0)
@@ -76,13 +78,13 @@ export function marcasMemoria(maxKb: number, n = 3): number[] {
   return marcas(Math.max(mb, 1), n).map((m) => m * 1024)
 }
 
-/** Etiqueta de eje para memoria: "0", "500 MB", "1,5 GB". */
+/** Etiqueta de eje para memoria: "0", "500 MB", "1.5 GB" ("1,5 GB" en español). */
 export function etiquetaMemoria(kb: number): string {
   if (kb === 0) return '0'
   const mb = kb / 1024
   if (mb < 1024) return `${Math.round(mb)} MB`
   const gb = mb / 1024
-  return `${Number.isInteger(gb) ? gb : gb.toFixed(1).replace('.', ',')} GB`
+  return `${Number.isInteger(gb) ? gb : decimal(gb, 1)} GB`
 }
 
 /** El índice de la muestra más cercana a `t`. */

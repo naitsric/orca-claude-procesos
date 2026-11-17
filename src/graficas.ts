@@ -13,6 +13,9 @@
 // oscuro sobre pares vecinos. El naranja queda cerca del rojo (ΔE 6,8 en oscuro) pero nunca son
 // vecinos, y los huérfanos llevan siempre ⚠ y su nombre. En claro, aguamarina y amarillo quedan
 // bajo 3:1 contra el fondo: por eso hay leyenda siempre y vista de tabla.
+//
+// Idioma: el de Orca hasta que llega la primera foto; después, el de la foto (./i18n), que es el
+// mismo de los motivos que calculó el worker.
 import {
   confirmarDeSesion,
   confirmarForzar,
@@ -26,7 +29,8 @@ import {
   type Hecho,
   type Pendiente
 } from './confirmar'
-import { duracion, memoria, plural, puertos } from './formato'
+import { duracion, memoria, porcentaje, puertos } from './formato'
+import { idioma, idiomaDeLocale, t, usarIdioma } from './i18n'
 import {
   apilar,
   construirSeries,
@@ -249,11 +253,9 @@ function color(c: ColorSerie): string {
   return c === 'otras' ? 'var(--otras)' : c === 'huerfanos' ? 'var(--huerfanos)' : `var(--s${c})`
 }
 
-function pct(v: number): string {
-  return `${Math.round(v)} %`
-}
+const pct = (v: number): string => porcentaje(v)
 
-const UNIDAD: Record<Medida, (v: number) => string> = { cpu: pct, rssKb: memoria }
+const UNIDAD: Record<Medida, (v: number) => string> = { cpu: pct, rssKb: (v) => memoria(v) }
 
 function total(m: Muestra, medida: Medida): number {
   const huerfanos = medida === 'cpu' ? m.huerfanosCpu : m.huerfanosRssKb
@@ -261,15 +263,22 @@ function total(m: Muestra, medida: Medida): number {
 }
 
 function hora(t: number): string {
-  return new Date(t).toLocaleTimeString(orca.locale || 'es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  // El locale de Orca si es del mismo idioma (es-CO, en-GB); si no, el del idioma del plugin.
+  const locale = idiomaDeLocale(orca.locale) === idioma() ? orca.locale : idioma()
+  return new Date(t).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 const raiz = {
+  titulo: el('h1'),
+  tituloSesiones: el('h2'),
+  tituloCpu: el('h2'),
+  tituloMem: el('h2'),
+  tituloRanking: el('h2'),
   vivo: el('div', { class: 'vivo', role: 'status' }),
-  rangos: el('div', { class: 'rangos', role: 'group', 'aria-label': 'Rango de tiempo' }),
+  rangos: el('div', { class: 'rangos', role: 'group' }),
   kpis: el('div', { class: 'kpis' }),
   aviso: el('div', { id: 'aviso' }),
-  leyenda: el('div', { class: 'leyenda', 'aria-label': 'Leyenda' }),
+  leyenda: el('div', { class: 'leyenda' }),
   cpu: el('div', { class: 'grafica' }),
   cpuAhora: el('span'),
   mem: el('div', { class: 'grafica' }),
@@ -282,18 +291,31 @@ const raiz = {
 function montar(): void {
   document.head.append(el('style', {}, CSS))
   document.body.append(
-    el('header', {}, el('h1', {}, 'Actividad de Claude'), raiz.vivo),
+    el('header', {}, raiz.titulo, raiz.vivo),
     raiz.rangos,
     raiz.kpis,
     raiz.aviso,
     // Como en el Monitor de Actividad: primero la lista con su botón para cerrar, después las gráficas.
-    el('section', { class: 'tarjeta' }, el('h2', {}, 'Sesiones'), raiz.sesiones),
+    el('section', { class: 'tarjeta' }, raiz.tituloSesiones, raiz.sesiones),
     raiz.leyenda,
-    el('section', { class: 'tarjeta' }, el('h2', {}, 'CPU', raiz.cpuAhora), raiz.cpu),
-    el('section', { class: 'tarjeta' }, el('h2', {}, 'Memoria', raiz.memAhora), raiz.mem),
-    el('section', { class: 'tarjeta' }, el('h2', {}, 'Dónde está la memoria'), raiz.ranking),
+    el('section', { class: 'tarjeta' }, raiz.tituloCpu, raiz.cpu),
+    el('section', { class: 'tarjeta' }, raiz.tituloMem, raiz.mem),
+    el('section', { class: 'tarjeta' }, raiz.tituloRanking, raiz.ranking),
     raiz.tabla
   )
+}
+
+/** Los títulos fijos: se repintan por si cambió el idioma. */
+function pintarTitulos(): void {
+  const a = t().actividad
+  document.documentElement.lang = idioma()
+  raiz.titulo.textContent = a.titulo
+  raiz.rangos.setAttribute('aria-label', a.rango)
+  raiz.leyenda.setAttribute('aria-label', a.leyenda)
+  raiz.tituloSesiones.textContent = a.sesiones
+  raiz.tituloCpu.replaceChildren('CPU', raiz.cpuAhora)
+  raiz.tituloMem.replaceChildren(a.memoria, raiz.memAhora)
+  raiz.tituloRanking.textContent = a.dondeMemoria
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -318,7 +340,7 @@ function pintarVivo(): void {
   const intervalo = historial?.intervaloMs ?? 5000
   const reciente = ultima && Date.now() - ultima.t < intervalo * 3
   raiz.vivo.className = reciente ? 'vivo' : 'vivo quieto'
-  raiz.vivo.replaceChildren(el('i'), reciente ? `En vivo · cada ${Math.round(intervalo / 1000)} s` : 'Sin muestras recientes')
+  raiz.vivo.replaceChildren(el('i'), reciente ? t().actividad.enVivo(Math.round(intervalo / 1000)) : t().actividad.sinMuestras)
 }
 
 function chispa(valores: number[]): SVGElement {
@@ -358,18 +380,19 @@ function pintarKpis(muestras: Muestra[]): void {
   const sesiones = foto?.sesiones ?? []
   const trabajando = sesiones.filter((x) => x.estado === 'busy').length
   const huerfanos = foto?.totales.huerfanos ?? 0
+  const a = t().actividad
   raiz.kpis.replaceChildren(
-    kpi('CPU de Claude', ultima ? pct(total(ultima, 'cpu')) : '—', cpus.length ? `pico ${pct(Math.max(...cpus))} en ${rango} min` : ' ', cpus),
-    kpi('Memoria', ultima ? memoria(total(ultima, 'rssKb')) : '—', mems.length ? `pico ${memoria(Math.max(...mems))}` : ' ', mems),
+    kpi(a.cpuClaude, ultima ? pct(total(ultima, 'cpu')) : '—', cpus.length ? a.picoEn(pct(Math.max(...cpus)), rango) : ' ', cpus),
+    kpi(a.memoria, ultima ? memoria(total(ultima, 'rssKb')) : '—', mems.length ? a.pico(memoria(Math.max(...mems))) : ' ', mems),
     kpi(
-      'Sesiones',
+      a.sesiones,
       String(sesiones.length),
-      sesiones.length ? `${trabajando} trabajando · ${sesiones.length - trabajando} esperando` : 'ninguna abierta'
+      sesiones.length ? a.trabajandoEsperando(trabajando, sesiones.length - trabajando) : a.ningunaAbierta
     ),
     kpi(
-      'Huérfanos',
+      a.huerfanos,
       String(huerfanos),
-      huerfanos ? `${memoria(foto!.totales.huerfanosRssKb)} sin dueño` : 'ninguno',
+      huerfanos ? a.sinDueno(memoria(foto!.totales.huerfanosRssKb)) : a.ninguno,
       undefined,
       huerfanos > 0
     )
@@ -393,7 +416,7 @@ function pintarLeyenda(series: Serie[]): void {
 function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number, hasta: number, intervaloMs: number): void {
   cont.replaceChildren()
   if (datos.t.length < 2 || !datos.series.length) {
-    cont.append(el('div', { class: 'vacio' }, 'Juntando datos: la gráfica aparece con la segunda muestra.'))
+    cont.append(el('div', { class: 'vacio' }, t().actividad.juntando))
     return
   }
   const formato = UNIDAD[medida]
@@ -415,7 +438,7 @@ function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number,
     tabindex: 0,
     role: 'img',
     'data-foco': `grafica-${medida}`,
-    'aria-label': `${medida === 'cpu' ? 'CPU' : 'Memoria'} de Claude en los últimos ${rango} minutos. Flechas para recorrer.`
+    'aria-label': t().actividad.ariaGrafica(medida === 'cpu', rango)
   })
   for (const v of ticks) {
     svg.append(
@@ -426,7 +449,7 @@ function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number,
   const etiquetasX: [number, string, string][] = [
     [desde, `−${rango} min`, 'start'],
     [desde + (hasta - desde) / 2, `−${Math.round(rango / 2)} min`, 'middle'],
-    [hasta, 'ahora', 'end']
+    [hasta, t().actividad.ahora, 'end']
   ]
   for (const [t, texto, ancla] of etiquetasX) {
     svg.append(s('text', { x: x(t), y: ALTO_GRAFICA - 4, 'text-anchor': ancla }, texto))
@@ -504,9 +527,9 @@ function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number,
         )
       )
     tip.replaceChildren(
-      el('div', { class: 'hora' }, `hace ${duracion(hasta - datos.t[idx])} · ${hora(datos.t[idx])}`),
+      el('div', { class: 'hora' }, t().actividad.haceHora(duracion(hasta - datos.t[idx]), hora(datos.t[idx]))),
       ...filas,
-      el('div', { class: 'fila total' }, el('i', { class: 'clave' }), el('b', {}, formato(cima[idx])), el('span', {}, 'Total'))
+      el('div', { class: 'fila total' }, el('i', { class: 'clave' }), el('b', {}, formato(cima[idx])), el('span', {}, t().actividad.total))
     )
     tip.hidden = false
     // A la derecha de la mira si cabe; si no, a la izquierda, sin tapar el eje Y.
@@ -558,16 +581,17 @@ function filaBarra(nombre: Hijo[], cifra: Hijo[], fraccion: number, fondo: strin
 /** Barras ordenadas, de un solo tono: en qué tipo de proceso está la memoria ahora. */
 function pintarRanking(): void {
   if (!foto || foto.error) {
-    raiz.ranking.replaceChildren(el('div', { class: 'vacio' }, 'Esperando la primera revisión.'))
+    raiz.ranking.replaceChildren(el('div', { class: 'vacio' }, t().actividad.esperandoRevision))
     return
   }
+  const g = t().actividad.grupos
   const grupos: [string, number, boolean][] = [
-    ['Claude (las sesiones)', 0, false],
-    ['Servidores MCP', 0, false],
-    ['Comandos, servidores y túneles', 0, false],
-    ['Navegadores', 0, false],
-    ['Otros', 0, false],
-    ['⚠ Huérfanos', foto.totales.huerfanosRssKb, true]
+    [g.claude, 0, false],
+    [g.mcp, 0, false],
+    [g.comandos, 0, false],
+    [g.navegadores, 0, false],
+    [g.otros, 0, false],
+    [g.huerfanos, foto.totales.huerfanosRssKb, true]
   ]
   for (const sesion of foto.sesiones) {
     grupos[0][1] += sesion.rssKb
@@ -596,7 +620,7 @@ function pintarSesiones(ultima: Muestra | undefined, colores: Record<string, num
   const suelta = sinFila ? accion(sinFila) : null
   if (suelta) hijos.push(suelta)
   if (!sesiones.length) {
-    hijos.push(el('div', { class: 'vacio' }, foto ? 'No hay sesiones de Claude abiertas.' : 'Esperando la primera revisión.'))
+    hijos.push(el('div', { class: 'vacio' }, foto ? t().actividad.sinSesiones : t().actividad.esperandoRevision))
     raiz.sesiones.replaceChildren(...hijos)
     return
   }
@@ -609,13 +633,7 @@ function pintarSesiones(ultima: Muestra | undefined, colores: Record<string, num
   const lista = [...sesiones].sort((a, b) => turno(a) - turno(b) || a.pid - b.pid)
   const max = Math.max(...lista.map((x) => enMuestra.get(`s${x.pid}`)?.rssKb ?? x.rssTotalKb), 1)
   for (const x of lista) hijos.push(filaSesion(x, enMuestra.get(`s${x.pid}`), colores, max))
-  hijos.push(
-    el(
-      'p',
-      { class: 'pie' },
-      'Despliega una sesión para cerrar solo algunos de sus procesos sin cerrarla. El detalle de cada uno está en el panel «Procesos de Claude».'
-    )
-  )
+  hijos.push(el('p', { class: 'pie' }, t().actividad.pie))
   raiz.sesiones.replaceChildren(...hijos)
 }
 
@@ -637,18 +655,18 @@ function filaSesion(x: Sesion, enVivo: MuestraSesion | undefined, colores: Recor
       el('span', { class: 'nombre', title: nombre }, tieneAviso(x) ? el('span', { class: 'aviso' }, '⚠ ') : null, nombre),
       activo(clave)
         ? null
-        : boton('Cerrar sesión', 'suave', () => pedir(confirmarSesion(x, home, Date.now())), {
+        : boton(t().panel.cerrarSesion, 'suave', () => pedir(confirmarSesion(x, home, Date.now())), {
             foco: `cerrar-${clave}`,
             detener: true,
             deshabilitado: cerrando !== null,
-            etiqueta: `Cerrar la sesión ${nombre}`
+            etiqueta: t().actividad.cerrarLaSesion(nombre)
           })
     ),
     el(
       'div',
       { class: 'sub' },
       // Cuántos procesos lo dice «Ver sus procesos (N)» justo debajo.
-      `${estadoCorto(x, Date.now())} · ${x.procesos.length ? '' : 'sin procesos · '}`,
+      `${estadoCorto(x, Date.now())} · ${x.procesos.length ? '' : t().actividad.sinProcesos}`,
       el('b', {}, memoria(mem)),
       ` · ${pct(cpu)}`
     ),
@@ -666,8 +684,8 @@ function desplegar(x: Sesion, clave: string): HTMLElement {
   const b = el(
     'button',
     { type: 'button', class: 'desplegar', 'aria-expanded': String(abierta), 'data-foco': `ver-${clave}` },
-    `${abierta ? '▾ Ocultar' : '▸ Ver'} sus procesos (${x.procesos.length})`,
-    sobran ? el('span', { class: 'sobran' }, `· ${sobran} ${sobran === 1 ? 'sobra' : 'sobran'}`) : null
+    t().actividad.verProcesos(abierta, x.procesos.length),
+    sobran ? el('span', { class: 'sobran' }, t().actividad.sobran(sobran)) : null
   )
   b.addEventListener('click', () => {
     if (abierta) desplegadas.delete(clave)
@@ -678,7 +696,7 @@ function desplegar(x: Sesion, clave: string): HTMLElement {
 }
 
 /** El veredicto de cada proceso, en palabras: «sobra» no le sirve a nadie, «revisar» decide tú. */
-const ETIQUETA: Partial<Record<Proceso['veredicto'], string>> = { cerrar: 'sobra', revisar: 'revisar' }
+const etiquetaDe = (v: Proceso['veredicto']): string | undefined => t().actividad.etiquetaVeredicto[v]
 
 /** Los procesos de la sesión con una casilla cada uno, para cerrar solo esos y dejar la sesión. */
 function listaProcesos(x: Sesion, clave: string, home: string): HTMLElement {
@@ -700,7 +718,7 @@ function listaProcesos(x: Sesion, clave: string, home: string): HTMLElement {
       else marc.delete(p.pid)
       pintar()
     })
-    const tag = ETIQUETA[p.veredicto]
+    const tag = etiquetaDe(p.veredicto)
     return el(
       'label',
       { class: `proc${marc.has(p.pid) ? ' marcado' : ''}`, for: id, title: `${p.motivo}\n${p.comando}` },
@@ -719,7 +737,7 @@ function listaProcesos(x: Sesion, clave: string, home: string): HTMLElement {
   const todasSobran = sobran.length > 0 && sobran.every((p) => marc.has(p.pid)) && marc.size === sobran.length
   return el(
     'div',
-    { class: 'procs', role: 'group', 'aria-label': `Procesos de ${nombreSesion(x, home)}` },
+    { class: 'procs', role: 'group', 'aria-label': t().actividad.procesosDe(nombreSesion(x, home)) },
     ...filas,
     activo(clave)
       ? null
@@ -727,20 +745,20 @@ function listaProcesos(x: Sesion, clave: string, home: string): HTMLElement {
           'div',
           { class: 'botones' },
           boton(
-            elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados',
+            t().panel.cerrarSeleccionados(elegidos.length),
             'suave',
             () => pedir(confirmarDeSesion(x, elegidos, home), `cerrar-sel-${clave}`),
             { foco: `cerrar-sel-${clave}`, detener: true, deshabilitado: !elegidos.length || cerrando !== null }
           ),
           sobran.length && !todasSobran
-            ? boton(`Marcar los que sobran (${sobran.length})`, 'fantasma', () => {
+            ? boton(t().actividad.marcarSobran(sobran.length), 'fantasma', () => {
                 marcados.set(clave, new Set(sobran.map((p) => p.pid)))
                 enfocarDespues = `cerrar-sel-${clave}`
                 pintar()
               }, { foco: `marcar-${clave}` })
             : null
         ),
-    activo(clave) ? null : el('p', { class: 'ayuda' }, 'La sesión sigue abierta; solo se cierran los marcados (y sus hijos).')
+    activo(clave) ? null : el('p', { class: 'ayuda' }, t().actividad.ayuda)
   )
 }
 
@@ -757,23 +775,19 @@ function pintarAviso(): void {
     raiz.aviso.replaceChildren()
     return
   }
-  const t = f.totales
+  const tot = f.totales
+  const tx = t()
   raiz.aviso.replaceChildren(
     el(
       'div',
-      { class: 'caja danger', role: 'group', 'aria-label': 'Procesos huérfanos' },
-      el('div', { class: 'titulo' }, el('span', { class: 'icono', 'aria-hidden': 'true' }, '⚠'), plural(t.huerfanosSeguros, 'proceso huérfano', 'procesos huérfanos')),
-      el(
-        'p',
-        {},
-        `Siguieron vivos después de cerrar su sesión de Claude. Ocupan ${memoria(t.huerfanosRssKb)}` +
-          (t.puertosHuerfanos.length ? ` y ${puertos(t.puertosHuerfanos)}.` : '.')
-      ),
+      { class: 'caja danger', role: 'group', 'aria-label': tx.panel.huerfanosTabla },
+      el('div', { class: 'titulo' }, el('span', { class: 'icono', 'aria-hidden': 'true' }, '⚠'), tx.procesosHuerfanos(tot.huerfanosSeguros)),
+      el('p', {}, tx.panel.siguieronVivos(memoria(tot.huerfanosRssKb), puertos(tot.puertosHuerfanos))),
       el(
         'div',
         { class: 'botones' },
         boton(
-          t.huerfanosSeguros === 1 ? 'Cerrarlo' : 'Cerrar todos',
+          tot.huerfanosSeguros === 1 ? tx.panel.cerrarlo : tx.panel.cerrarTodos,
           'peligro',
           () => pedir(confirmarHuerfanos('huerfanos', seguros, f.huerfanos, f.home)),
           { foco: 'cerrar-huerfanos', detener: true, deshabilitado: cerrando !== null }
@@ -808,17 +822,18 @@ function pintarTabla(muestras: Muestra[]): void {
     )
   if (ultima.huerfanosRssKb > 0) {
     filas.push(
-      el('tr', {}, el('td', {}, '⚠ Huérfanos'), el('td', {}, pct(ultima.huerfanosCpu)), el('td', {}, '—'), el('td', {}, memoria(ultima.huerfanosRssKb)), el('td', {}, '—'))
+      el('tr', {}, el('td', {}, t().actividad.grupos.huerfanos), el('td', {}, pct(ultima.huerfanosCpu)), el('td', {}, '—'), el('td', {}, memoria(ultima.huerfanosRssKb)), el('td', {}, '—'))
     )
   }
+  const c = t().actividad.columnas
   const detalles = el(
     'details',
     {},
-    el('summary', {}, 'Ver como tabla'),
+    el('summary', {}, t().actividad.verTabla),
     el(
       'table',
       {},
-      el('thead', {}, el('tr', {}, el('th', {}, 'Sesión'), el('th', {}, 'CPU'), el('th', {}, 'Pico'), el('th', {}, 'Memoria'), el('th', {}, 'Pico'))),
+      el('thead', {}, el('tr', {}, el('th', {}, c.sesion), el('th', {}, c.cpu), el('th', {}, c.pico), el('th', {}, c.memoria), el('th', {}, c.pico))),
       el('tbody', {}, ...filas)
     )
   )
@@ -841,10 +856,11 @@ function pintar(): void {
 }
 
 function pintarTodo(): void {
+  pintarTitulos()
   pintarRangos()
   pintarVivo()
   if (fallo && !historial) {
-    raiz.kpis.replaceChildren(el('div', { class: 'vacio' }, `El worker no respondió: ${fallo}`))
+    raiz.kpis.replaceChildren(el('div', { class: 'vacio' }, t().confirmar.workerNoRespondio(fallo)))
     return
   }
   const h = historial ?? { muestras: [], colores: {}, intervaloMs: 5000 }
@@ -910,7 +926,7 @@ async function ejecutar(p: Pendiente): Promise<void> {
       { objetivos: p.objetivos, senal: p.senal, arbol: p.arbol },
       { timeoutMs: 60_000 }
     )
-    foto = r.foto
+    recibir(r.foto)
     hecho = { origen: p.origen, titulo: p.hecho, lista: r.resultados }
     marcados.delete(p.origen)
   } catch (error) {
@@ -959,10 +975,10 @@ function resultado(h: Hecho): HTMLElement {
       'div',
       { class: 'botones' },
       r.vivos.length
-        ? boton('Forzar cierre', 'peligro', () => pedir(confirmarForzar(h.origen, r.vivos, foto)), { foco: `forzar-${h.origen}` })
+        ? boton(t().panel.forzar, 'peligro', () => pedir(confirmarForzar(h.origen, r.vivos, foto)), { foco: `forzar-${h.origen}` })
         : null,
       boton(
-        'Listo',
+        t().panel.listo,
         'fantasma',
         () => {
           hecho = null
@@ -978,7 +994,7 @@ function resultado(h: Hecho): HTMLElement {
 function accion(origen: string): HTMLElement | null {
   if (pendiente?.origen === origen) return confirmacion(pendiente)
   if (cerrando === origen) {
-    return el('div', { class: 'cerrando', role: 'status' }, el('i', { class: 'giro', 'aria-hidden': 'true' }), 'Cerrando…')
+    return el('div', { class: 'cerrando', role: 'status' }, el('i', { class: 'giro', 'aria-hidden': 'true' }), t().panel.cerrandoPuntos)
   }
   if (hecho?.origen === origen) return resultado(hecho)
   return null
@@ -987,7 +1003,14 @@ function accion(origen: string): HTMLElement | null {
 // ---------------------------------------------------------------------------------------------
 // Datos
 
+/** Los textos van en el idioma de la foto, el mismo de los motivos que calculó el worker. */
+function recibir(f: Foto): void {
+  usarIdioma(f.idioma)
+  foto = f
+}
+
 async function iniciar(): Promise<void> {
+  usarIdioma(idiomaDeLocale(orca.locale))
   montar()
   const guardado = await orca.storage.get(CLAVE_RANGO).catch(() => null)
   if (typeof guardado === 'number' && (RANGOS as readonly number[]).includes(guardado)) rango = guardado
@@ -1000,17 +1023,17 @@ async function iniciar(): Promise<void> {
     pintar()
   })
   orca.plugin.on('procesos.foto', (f) => {
-    foto = f
+    recibir(f)
     pintar()
   })
 
   const [h, f] = await Promise.allSettled([
     orca.plugin.request('procesos.historial', undefined, { timeoutMs: 60_000 }),
-    orca.plugin.request('procesos.foto', undefined, { timeoutMs: 60_000 })
+    orca.plugin.request('procesos.foto', { locale: orca.locale }, { timeoutMs: 60_000 })
   ])
   if (h.status === 'fulfilled') historial = h.value
   else fallo = h.reason instanceof Error ? h.reason.message : String(h.reason)
-  if (f.status === 'fulfilled') foto = f.value
+  if (f.status === 'fulfilled') recibir(f.value)
   pintar()
 
   let ancho = document.body.clientWidth

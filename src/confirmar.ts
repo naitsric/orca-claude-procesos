@@ -2,6 +2,7 @@
 // los dos paneles («Procesos de Claude» y «Actividad de Claude»), así que preguntan lo mismo y
 // cierran lo mismo, y se prueba en Node.
 import { carpeta, duracion, memoria, plural, puertos } from './formato'
+import { t } from './i18n'
 import type { Foto, Huerfano, Objetivo, Proceso, ResultadoCierre, Rol, Senal, Sesion } from './tipos'
 
 export type Tono = 'warning' | 'danger'
@@ -29,17 +30,10 @@ export type Pendiente = {
 
 export type Hecho = { origen: string; titulo: string; lista: ResultadoCierre[]; error?: string }
 
-export const ROL: Record<Rol, [string, string]> = {
-  sesion: ['sesión de Claude', 'sesiones de Claude'],
-  mcp: ['servidor MCP', 'servidores MCP'],
-  bash: ['comando de Bash', 'comandos de Bash'],
-  comando: ['proceso de un comando', 'procesos de comandos'],
-  servidor: ['servidor', 'servidores'],
-  tunel: ['túnel', 'túneles'],
-  navegador: ['proceso del navegador', 'procesos del navegador'],
-  despierto: ['caffeinate', 'caffeinate'],
-  agente: ['otra sesión de Claude', 'otras sesiones de Claude'],
-  otro: ['otro proceso', 'otros procesos']
+/** Cómo se llama un tipo de proceso: en singular, o con su número delante. */
+function rol(r: Rol, n?: number): string {
+  const [uno, varios] = t().roles[r]
+  return n === undefined ? uno : plural(n, uno, varios)
 }
 
 const ORDEN_ROLES: readonly Rol[] = ['agente', 'mcp', 'bash', 'comando', 'servidor', 'tunel', 'navegador', 'despierto', 'otro']
@@ -54,10 +48,11 @@ export function nombreSesion(s: Sesion, home: string): string {
 
 export function estadoCorto(s: Sesion, ahora: number): string {
   const desde = s.estadoDesde ? duracion(ahora - s.estadoDesde) : null
-  if (s.estado === 'busy') return 'trabajando'
-  if (s.estado === 'idle') return desde ? `inactiva ${desde}` : 'inactiva'
+  const c = t().confirmar
+  if (s.estado === 'busy') return c.trabajando
+  if (s.estado === 'idle') return c.inactiva(desde)
   if (s.estado) return desde ? `${s.estado} ${desde}` : s.estado
-  return `abierta ${duracion(ahora - s.inicio)}`
+  return c.abiertaHace(duracion(ahora - s.inicio))
 }
 
 /** Si la sesión o alguno de sus procesos tiene algo que revisar (lleva ⚠). */
@@ -77,12 +72,12 @@ const todosLosPuertos = (lista: readonly { puertos: number[] }[]): number[] =>
 
 /** "6 servidores MCP · 160 MB", una línea por tipo de proceso. */
 function porTipo(lista: readonly Proceso[]): string[] {
-  return ORDEN_ROLES.flatMap((rol) => {
-    const grupo = lista.filter((p) => p.rol === rol)
+  return ORDEN_ROLES.flatMap((r) => {
+    const grupo = lista.filter((p) => p.rol === r)
     if (!grupo.length) return []
     const enPuerto = todosLosPuertos(grupo)
     return [
-      `${plural(grupo.length, ROL[rol][0], ROL[rol][1])} · ${memoria(suma(grupo))}` +
+      `${rol(r, grupo.length)} · ${memoria(suma(grupo))}` +
         (enPuerto.length ? ` · ${puertos(enPuerto)}` : '')
     ]
   })
@@ -94,7 +89,7 @@ function unoPorUno(lista: readonly (Proceso | Huerfano)[], detalle: (p: Proceso 
     const extra = detalle(p)
     return `${p.nombre}${extra ? ` · ${extra}` : ''} · ${memoria(p.rssKb)}` + (p.puertos.length ? ` · ${puertos(p.puertos)}` : '')
   })
-  if (lista.length > 5) lineas.push(`y ${lista.length - 5} más`)
+  if (lista.length > 5) lineas.push(t().confirmar.yMas(lista.length - 5))
   return lineas
 }
 
@@ -121,24 +116,23 @@ export function confirmarSesion(s: Sesion, home: string, ahora: number): Pendien
   const nombre = nombreSesion(s, home)
   const desacoplados = s.procesos.filter((p) => p.desacoplado)
   const enPuerto = todosLosPuertos(s.procesos)
+  const c = t().confirmar
   const notas: Nota[] = []
-  if (s.estado === 'busy') notas.push({ texto: 'Está trabajando ahora: la tarea en curso se corta.', tono: 'danger' })
-  else if (s.estado === 'idle' && s.estadoDesde) notas.push({ texto: `Está inactiva desde hace ${duracion(ahora - s.estadoDesde)}.` })
-  if (s.sessionId) notas.push({ texto: `La conversación no se pierde: la retomas con claude --resume ${s.sessionId}` })
-  if (desacoplados.length) {
-    notas.push({ texto: `Incluye ${plural(desacoplados.length, 'proceso que se había desprendido', 'procesos que se habían desprendido')} de la sesión.` })
-  }
-  if (enPuerto.length) notas.push({ texto: `Libera ${puertos(enPuerto)}.` })
+  if (s.estado === 'busy') notas.push({ texto: c.cortaTarea, tono: 'danger' })
+  else if (s.estado === 'idle' && s.estadoDesde) notas.push({ texto: c.inactivaDesde(duracion(ahora - s.estadoDesde)) })
+  if (s.sessionId) notas.push({ texto: c.noSePierde(s.sessionId) })
+  if (desacoplados.length) notas.push({ texto: c.incluyeDesprendidos(desacoplados.length) })
+  if (enPuerto.length) notas.push({ texto: c.libera(puertos(enPuerto)) })
   return {
     origen: `s${s.pid}`,
-    titulo: `¿Cerrar la sesión «${nombre}»?`,
+    titulo: c.cerrarSesionPregunta(nombre),
     tono: s.estado === 'busy' ? 'danger' : 'warning',
-    encabezado: `Se cierran ${plural(1 + s.procesos.length, 'proceso', 'procesos')} (${memoria(s.rssTotalKb)}):`,
-    items: [`claude, la sesión · ${memoria(s.rssKb)}`, ...porTipo(s.procesos)],
+    encabezado: c.seCierranConMemoria(1 + s.procesos.length, memoria(s.rssTotalKb)),
+    items: [c.laSesion(memoria(s.rssKb)), ...porTipo(s.procesos)],
     notas,
-    boton: 'Cerrar sesión',
-    cancelar: 'Mantenerla abierta',
-    hecho: `Cerré la sesión «${nombre}»`,
+    boton: c.cerrarSesion,
+    cancelar: c.mantenerla,
+    hecho: c.cerreSesion(nombre),
     objetivos: [objetivo(s), ...desacoplados.filter((p) => p.nivel === 0).map(objetivo)],
     senal: 'TERM',
     arbol: true
@@ -148,26 +142,25 @@ export function confirmarSesion(s: Sesion, home: string, ahora: number): Pendien
 export function confirmarDeSesion(s: Sesion, elegidos: readonly Proceso[], home: string): Pendiente | null {
   if (!elegidos.length) return null
   const hijos = descendientes(elegidos, s.procesos)
+  const c = t().confirmar
   const notas: Nota[] = []
-  if (hijos.length) notas.push({ texto: `Con ellos se ${hijos.length === 1 ? 'cierra' : 'cierran'} ${plural(hijos.length, 'proceso hijo', 'procesos hijos')}.` })
-  if (elegidos.some((p) => p.rol === 'mcp' && !p.desacoplado)) {
-    notas.push({ texto: 'La sesión pierde las herramientas de esos servidores MCP hasta que la reinicies.', tono: 'warning' })
-  }
+  if (hijos.length) notas.push({ texto: c.conEllosHijos(hijos.length) })
+  if (elegidos.some((p) => p.rol === 'mcp' && !p.desacoplado)) notas.push({ texto: c.pierdeHerramientas, tono: 'warning' })
   if (elegidos.some((p) => ['bash', 'comando', 'servidor', 'tunel'].includes(p.rol) && p.veredicto === 'dejar')) {
-    notas.push({ texto: 'Claude puede estar esperando a que ese comando termine; lo verá fallar.', tono: 'warning' })
+    notas.push({ texto: c.esperaComando, tono: 'warning' })
   }
-  notas.push({ texto: 'La sesión sigue abierta.' })
+  notas.push({ texto: c.sigueAbierta })
   const n = elegidos.length
   return {
     origen: `s${s.pid}`,
-    titulo: `¿Cerrar ${plural(n, 'proceso', 'procesos')} de «${nombreSesion(s, home)}»?`,
+    titulo: c.cerrarDeSesion(n, nombreSesion(s, home)),
     tono: 'warning',
-    encabezado: `Se ${n === 1 ? 'cierra' : 'cierran'}:`,
-    items: unoPorUno(elegidos, (p) => ROL[p.rol][0]),
+    encabezado: c.seCierran(n),
+    items: unoPorUno(elegidos, (p) => rol(p.rol)),
     notas,
-    boton: `Cerrar ${plural(n, 'proceso', 'procesos')}`,
-    cancelar: 'Cancelar',
-    hecho: `Cerré ${plural(n + hijos.length, 'proceso', 'procesos')}`,
+    boton: c.cerrarN(n),
+    cancelar: c.cancelar,
+    hecho: c.cerreN(n + hijos.length),
     objetivos: elegidos.map(objetivo),
     senal: 'TERM',
     arbol: true
@@ -184,31 +177,27 @@ export function confirmarHuerfanos(
   const hijos = descendientes(elegidos, todos)
   const probables = elegidos.filter((h) => h.certeza === 'probable')
   const enPuerto = todosLosPuertos([...elegidos, ...hijos])
+  const c = t().confirmar
   const notas: Nota[] = []
-  if (hijos.length) notas.push({ texto: `Con ellos se ${hijos.length === 1 ? 'cierra' : 'cierran'} ${plural(hijos.length, 'proceso hijo', 'procesos hijos')}.` })
-  if (probables.length < elegidos.length) notas.push({ texto: 'Su sesión de Claude ya terminó: nadie los está usando.' })
-  if (probables.length) {
-    notas.push({
-      texto: `${probables.map((h) => h.nombre).join(', ')} podría ser de otra app (Cursor, Claude Desktop…).`,
-      tono: 'warning'
-    })
-  }
-  if (enPuerto.length) notas.push({ texto: `Libera ${puertos(enPuerto)}.` })
+  if (hijos.length) notas.push({ texto: c.conEllosHijos(hijos.length) })
+  if (probables.length < elegidos.length) notas.push({ texto: c.yaTermino })
+  if (probables.length) notas.push({ texto: c.otraApp(probables.map((h) => h.nombre).join(', ')), tono: 'warning' })
+  if (enPuerto.length) notas.push({ texto: c.libera(puertos(enPuerto)) })
   const n = elegidos.length
   return {
     origen,
-    titulo: `¿Cerrar ${plural(n, 'proceso huérfano', 'procesos huérfanos')}?`,
+    titulo: c.cerrarHuerfanos(n),
     tono: 'warning',
-    encabezado: `Se ${n === 1 ? 'cierra' : 'cierran'}:`,
+    encabezado: c.seCierran(n),
     items: unoPorUno(elegidos, (p) => {
       const h = p as Huerfano
-      if (!h.origen) return h.certeza === 'probable' ? 'origen dudoso' : 'de una sesión que ya no existe'
-      return `de «${h.origen.nombre ?? carpeta(h.origen.cwd, home)}»`
+      if (!h.origen) return h.certeza === 'probable' ? c.origenDudoso : c.sesionInexistente
+      return c.deSesion(h.origen.nombre ?? carpeta(h.origen.cwd, home))
     }),
     notas,
-    boton: `Cerrar ${plural(n, 'proceso', 'procesos')}`,
-    cancelar: 'Cancelar',
-    hecho: `Cerré ${plural(n + hijos.length, 'proceso', 'procesos')}`,
+    boton: c.cerrarN(n),
+    cancelar: c.cancelar,
+    hecho: c.cerreN(n + hijos.length),
     objetivos: elegidos.map(objetivo),
     senal: 'TERM',
     arbol: true
@@ -225,16 +214,17 @@ export function confirmarForzar(origen: string, vivos: readonly ResultadoCierre[
   for (const h of f.huerfanos) inicios.set(h.pid, h.inicio)
   const lista = vivos.filter((r) => inicios.has(r.pid))
   if (!lista.length) return null
+  const c = t().confirmar
   return {
     origen,
-    titulo: `¿Forzar el cierre de ${plural(lista.length, 'proceso', 'procesos')}?`,
+    titulo: c.forzarPregunta(lista.length),
     tono: 'danger',
-    encabezado: 'No respondieron al cierre normal:',
+    encabezado: c.noRespondieron,
     items: lista.map((r) => `${r.nombre} · pid ${r.pid}`),
-    notas: [{ texto: 'Forzar (SIGKILL) los termina en el acto, sin dejarles guardar nada.', tono: 'warning' }],
-    boton: 'Forzar cierre',
-    cancelar: 'Dejarlos así',
-    hecho: `Forcé el cierre de ${plural(lista.length, 'proceso', 'procesos')}`,
+    notas: [{ texto: c.sigkill, tono: 'warning' }],
+    boton: c.forzar,
+    cancelar: c.dejarlos,
+    hecho: c.forzado(lista.length),
     objetivos: lista.map((r) => ({ pid: r.pid, inicio: inicios.get(r.pid)! })),
     senal: 'KILL',
     arbol: false
@@ -247,15 +237,12 @@ export function resumirHecho(h: Hecho): { titulo: string; todoBien: boolean; lin
   const vivos = h.lista.filter((r) => r.resultado === 'sigue-vivo')
   const fallidos = h.lista.filter((r) => r.resultado === 'rechazado' || r.resultado === 'error')
   const todoBien = !h.error && !vivos.length && !fallidos.length
-  const titulo = h.error
-    ? 'No se pudo cerrar'
-    : todoBien
-      ? h.titulo
-      : `Cerré ${cerrados.length} de ${plural(h.lista.length, 'proceso', 'procesos')}`
+  const c = t().confirmar
+  const titulo = h.error ? c.noSePudo : todoBien ? h.titulo : c.cerreDe(cerrados.length, h.lista.length)
   const lineas: string[] = []
-  if (h.error) lineas.push(`El worker no respondió: ${h.error}`)
-  if (todoBien && cerrados.length > 1) lineas.push(`${plural(cerrados.length, 'proceso cerrado', 'procesos cerrados')}.`)
-  if (vivos.length) lineas.push(`Siguen vivos: ${vivos.map((r) => `${r.nombre} (${r.pid})`).join(', ')}.`)
+  if (h.error) lineas.push(c.workerNoRespondio(h.error))
+  if (todoBien && cerrados.length > 1) lineas.push(c.cerrados(cerrados.length))
+  if (vivos.length) lineas.push(c.siguenVivos(vivos.map((r) => `${r.nombre} (${r.pid})`).join(', ')))
   for (const r of fallidos) lineas.push(`${r.nombre} (${r.pid}): ${r.detalle ?? r.resultado}`)
   return { titulo, todoBien, lineas, vivos }
 }

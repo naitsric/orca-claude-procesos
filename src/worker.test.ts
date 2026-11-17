@@ -16,7 +16,7 @@ test('revisa la máquina, publica la foto y actualiza la barra', async () => {
   assert.match(barra[barra.length - 1].text, /^Claude \d+/)
 
   const texto = await worker.command('revisar')
-  assert.match(String(texto), /sesi(ón|ones) de Claude/)
+  assert.match(String(texto), /Claude sessions?/)
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
 })

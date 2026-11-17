@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="design/icon.png" width="128" alt="Procesos de Claude">
+  <img src="design/icon.png" width="128" alt="Claude Processes">
 </p>
 
-<h1 align="center">Procesos de Claude</h1>
+<h1 align="center">Claude Processes</h1>
 
 <p align="center">
   <strong>An activity monitor for Claude Code, built into Orca.</strong><br>
@@ -16,10 +16,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" width="360" alt="The Actividad de Claude panel: CPU and memory over the last 15 minutes, stacked by session, with a tooltip listing every session at one moment">
+  <img src="docs/screenshot.png" width="360" alt="The Claude Activity panel: CPU and memory over the last 15 minutes, stacked by session, with a tooltip listing every session at one moment">
 </p>
 
-## Why Procesos de Claude
+## Why Claude Processes
 
 Every Claude Code session starts processes of its own: MCP servers, the shells
 behind the Bash tool, and the dev servers and tunnels it launches for you. Most
@@ -28,7 +28,7 @@ background command or a forgotten tunnel keeps holding memory and ports long
 after anyone needs it. With a few sessions open, Activity Monitor can't tell
 you which `node` belongs to which conversation.
 
-Procesos de Claude groups every process under the session that started it,
+Claude Processes groups every process under the session that started it,
 names each session, finds what outlived its session and tells you what is safe
 to close. It is careful about it: it asks before closing anything, checks each
 process again right before signalling it, and never touches a process that
@@ -48,7 +48,7 @@ isn't Claude's.
   show up, not only Orca's.
 
 ### Activity over time
-- **A second panel, Actividad de Claude**, in the spirit of Activity Monitor's
+- **A second panel, Claude Activity**, in the spirit of Activity Monitor's
   graphs: CPU and memory over the last 5, 15 or 30 minutes, stacked by session
   and sampled every 5 seconds.
 - **Real CPU usage**, measured from each process's CPU time between samples.
@@ -60,12 +60,12 @@ isn't Claude's.
 - **Each session keeps its color** while it is on screen, and orphans are
   always red with ⚠. A table view carries every value without relying on color.
 - **Close from the same view**, like Activity Monitor's stop button: every
-  session has a *Cerrar sesión* button, and safe orphans get a *Cerrar todos*
+  session has a *Close session* button, and certain orphans get a *Close all*
   notice. Both ask the same confirmation as the main panel, right where you
   clicked.
 - **Close only some processes and keep the session**: expand a session, tick
-  the processes you want gone (or *Marcar los que sobran* to tick the ones
-  nothing uses), and close just those. Their children go with them; the
+  the processes you want gone (or *Select unneeded* to tick the ones nothing
+  uses), and close just those. Their children go with them; the
   session stays open.
 
 ### Find what outlived its session
@@ -107,9 +107,16 @@ isn't Claude's.
   Claude are never offered.
 
 ### Always in sight
-- A **status bar item**, `Claude 5 · 2 huérfanos`, that turns amber when there
+- A **status bar item**, `Claude 5 · 2 orphans`, that turns amber when there
   are orphans and red when they hold ports. Click it to check now.
 - Two **command palette** entries: check now, and close every certain orphan.
+
+### In your language
+- **English and Spanish.** The panels, the status bar and the notifications
+  follow Orca's interface language: Spanish when Orca is in Spanish, English
+  for any other language.
+- **Your choice wins**: the *Language* setting can pin English or Spanish
+  regardless of Orca's language.
 
 ## Install
 
@@ -131,8 +138,8 @@ from `/proc`, so `lsof` isn't needed.
    orca plugin install naitsric/orca-claude-procesos --approve ap1-…
    ```
 
-3. **Open it** from Orca's right sidebar: **Procesos de Claude** has the
-   sessions and their processes, **Actividad de Claude** the graphs. Or from the
+3. **Open it** from Orca's right sidebar: **Claude Processes** has the
+   sessions and their processes, **Claude Activity** the graphs. Or from the
    terminal:
 
    ```sh
@@ -160,10 +167,11 @@ The plugin makes no network requests.
 
 ## Settings
 
-In Settings → Plugins → Procesos de Claude:
+In Settings → Plugins → Claude Processes:
 
 | Setting | Default | |
 | --- | --- | --- |
+| Language | Same as Orca | English or Spanish. *Same as Orca* uses Orca's interface language, and English if it is neither. |
 | Check interval | 15 s | From 5 to 300 seconds. |
 | Long session threshold | 12 h | A session idle for longer than this is marked for review. |
 | Notify about orphans | On | A desktop notification the first time a process outlives its session. |
@@ -203,7 +211,6 @@ same start time as the one you chose.
 
 ## Roadmap
 
-- English interface (the UI is in Spanish today)
 - Jump from a session to its Orca terminal
 
 ## Contributing
@@ -218,4 +225,4 @@ find your way around the code.
 
 ---
 
-<sub>Claude and Claude Code are trademarks of Anthropic. Orca is developed by Stably AI. Procesos de Claude is an independent project and is not affiliated with or endorsed by either.</sub>
+<sub>Claude and Claude Code are trademarks of Anthropic. Orca is developed by Stably AI. Claude Processes is an independent project and is not affiliated with or endorsed by either.</sub>

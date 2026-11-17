@@ -1,9 +1,9 @@
 {
   "manifestVersion": 2,
   "id": "claude-procesos",
-  "name": "Procesos de Claude",
-  "version": "0.4.0",
-  "description": "Monitor de las sesiones de Claude Code, los procesos que lanzan y los que quedaron huérfanos, con el veredicto de cuáles cerrar.",
+  "name": "Claude Processes",
+  "version": "0.5.0",
+  "description": "Monitor for Claude Code sessions, the processes they start and the ones left orphaned, with a verdict on which to close. In English and Spanish.",
   "icon": "design/icon-256.png",
   "author": {
     "name": "naitsric",
@@ -22,14 +22,14 @@
     "panels": [
       {
         "id": "procesos",
-        "title": "Procesos de Claude",
+        "title": "Claude Processes",
         "icon": "activity",
         "entry": "src/panel.tsx",
         "ui": "components"
       },
       {
         "id": "actividad",
-        "title": "Actividad de Claude",
+        "title": "Claude Activity",
         "icon": "bar-chart-3",
         "entry": "src/graficas.ts",
         "ui": "html"
@@ -38,11 +38,11 @@
     "commands": [
       {
         "id": "revisar",
-        "title": "Procesos de Claude: revisar ahora"
+        "title": "Claude Processes: check now"
       },
       {
         "id": "cerrar-huerfanos",
-        "title": "Procesos de Claude: cerrar los huérfanos seguros"
+        "title": "Claude Processes: close certain orphans"
       }
     ],
     "statusBarItems": [
@@ -50,15 +50,32 @@
         "id": "resumen",
         "text": "Claude",
         "icon": "bot",
-        "tooltip": "Procesos de Claude",
+        "tooltip": "Claude Processes",
         "command": "revisar"
       }
     ],
     "settings": [
       {
+        "key": "idioma",
+        "title": "Language",
+        "description": "Language of the panels, the status bar and the notifications. “Same as Orca” follows Orca's interface language, or English if the plugin doesn't have it.",
+        "type": "string",
+        "default": "auto",
+        "enum": [
+          "auto",
+          "en",
+          "es"
+        ],
+        "enumLabels": [
+          "Same as Orca",
+          "English",
+          "Español"
+        ]
+      },
+      {
         "key": "intervaloSegundos",
-        "title": "Cada cuántos segundos revisar",
-        "description": "El worker revisa los procesos (ps, y lsof en macOS o /proc en Linux) con esta frecuencia mientras el plugin está activo.",
+        "title": "Check interval (seconds)",
+        "description": "How often the worker checks the processes (ps, plus lsof on macOS or /proc on Linux) while the plugin is on.",
         "type": "integer",
         "default": 15,
         "minimum": 5,
@@ -66,8 +83,8 @@
       },
       {
         "key": "horasSesionLarga",
-        "title": "Horas para marcar una sesión como larga",
-        "description": "Una sesión abierta más tiempo que esto y sin actividad de CPU queda en «revisar».",
+        "title": "Hours before a session counts as long",
+        "description": "A session open longer than this with no CPU activity is marked for review.",
         "type": "number",
         "default": 12,
         "minimum": 1,
@@ -75,8 +92,8 @@
       },
       {
         "key": "avisarHuerfanos",
-        "title": "Avisar cuando aparezcan huérfanos",
-        "description": "Notificación de escritorio la primera vez que un proceso de Claude sobrevive a su sesión.",
+        "title": "Notify about orphans",
+        "description": "A desktop notification the first time a Claude process outlives its session.",
         "type": "boolean",
         "default": true
       }

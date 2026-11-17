@@ -1,4 +1,5 @@
 // Tipos que comparten el worker y el panel. Solo datos JSON: viajan por plugin.request y posts.
+import type { Idioma } from './i18n'
 
 /** Qué es cada proceso dentro del árbol de una sesión de Claude Code. */
 export type Rol =
@@ -90,6 +91,8 @@ export type Totales = {
 /** Una foto del sistema: lo que el worker devuelve y publica en cada revisión. */
 export type Foto = {
   tomadaEn: number
+  /** El idioma de los textos que trae (motivos, anfitriones, errores): los paneles pintan en ese. */
+  idioma: Idioma
   /** El home del usuario, para mostrar rutas con ~. */
   home: string
   sesiones: Sesion[]
