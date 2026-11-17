@@ -11,7 +11,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Orca-%E2%89%A5%201.4.248-6b5bd2" alt="Orca 1.4.248 or later">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="macOS and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
@@ -113,8 +113,10 @@ isn't Claude's.
 
 ## Install
 
-Requires **Orca 1.4.248 or later on macOS**, with plugins turned on
-(Settings → Plugins → *Turn on plugins*).
+Requires **Orca 1.4.248 or later on macOS or Linux**, with plugins turned on
+(Settings → Plugins → *Turn on plugins*). On Linux it needs `ps` from procps,
+which desktop distributions install by default; it reads ports and folders
+from `/proc`, so `lsof` isn't needed.
 
 1. **Request the install.** The plugin runs code, so Orca asks for your approval
    first. It prints the access the plugin requests and a fingerprint:
@@ -138,7 +140,7 @@ Requires **Orca 1.4.248 or later on macOS**, with plugins turned on
    orca plugin open naitsric.claude-procesos --panel actividad
    ```
 
-The `orca` CLI ships inside the app. If your shell can't find it, use
+The `orca` CLI ships inside the app. If your shell can't find it on macOS, use
 `/Applications/Orca.app/Contents/Resources/bin/orca` or add an alias for it.
 
 **Update** with `orca plugin update naitsric.claude-procesos`. It asks for
@@ -149,7 +151,7 @@ approval again only if the requested access changes. **Uninstall** with
 
 | Access | Why |
 | --- | --- |
-| Run code in Node.js as your user (`trusted-worker`) | List processes with `ps` and `lsof`, read `~/.claude/sessions/`, and signal the processes you choose to close. |
+| Run code in Node.js as your user (`trusted-worker`) | List processes with `ps` (plus `lsof` on macOS and `/proc` on Linux), read `~/.claude/sessions/`, and signal the processes you choose to close. |
 | `storage:own` | Remember which processes started under each session. That record is how it recognizes orphans. |
 | `settings:own` | Read its own settings. |
 | `notifications:show` | Tell you when something outlives its session. |
@@ -174,22 +176,24 @@ process. The name, conversation ID and status come from
 versions that don't write that file, the panel uses the folder and CPU usage
 instead.
 
-**Orphans.** macOS doesn't let one process read another's environment, so
-there is no way to ask a process whether Claude started it. Instead, the worker
+**Orphans.** A process doesn't say which session started it, so the worker
 checks every few seconds and keeps a record of what it saw:
 - which processes descended from each session;
 - which process groups each session and each Bash shell led;
 - when each session ended (kept for seven days).
 
-A process whose parent is `launchd` is a certain orphan when it matches that
-record, or when it is a Bash tool shell, which carries the
+When a process's parent dies, it is adopted by `launchd` on macOS, and on
+Linux by `init` or by the `systemd --user` of the desktop session. An adopted
+process is a certain orphan when it matches that record, or when it is a Bash
+tool shell, which carries the
 `~/.claude/shell-snapshots` marker. Orphans whose session ended before the
 plugin was installed can only be recognized by that marker; MCP servers among
 them show up as probable.
 
-**Graphs.** Every 5 seconds the worker takes a light sample with `ps` alone.
-It sums each session's memory and the CPU time its processes used since the
-previous sample. It keeps 30 minutes of samples and saves them once a minute,
+**Graphs.** Every 5 seconds the worker takes a light sample with `ps` alone
+(on Linux, plus `/proc/<pid>/stat`, since `ps` there counts CPU time in whole
+seconds). It sums each session's memory and the CPU time its processes used
+since the previous sample. It keeps 30 minutes of samples and saves them once a minute,
 so the graphs survive a restart. Gaps in sampling show as gaps, never as
 interpolated lines.
 
@@ -201,7 +205,6 @@ same start time as the one you chose.
 
 - English interface (the UI is in Spanish today)
 - Jump from a session to its Orca terminal
-- Linux support
 
 ## Contributing
 

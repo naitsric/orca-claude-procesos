@@ -11,6 +11,9 @@ declare module 'node:child_process' {
 
 declare module 'node:fs/promises' {
   export function readFile(path: string, encoding: 'utf8'): Promise<string>
+  export function readdir(path: string): Promise<string[]>
+  export function readlink(path: string): Promise<string>
+  export function access(path: string): Promise<void>
 }
 
 declare module 'node:os' {
@@ -21,6 +24,7 @@ declare const process: {
   readonly pid: number
   readonly ppid: number
   readonly env: Record<string, string | undefined>
+  readonly platform: string
   getuid(): number
   kill(pid: number, signal?: string | number): boolean
 }

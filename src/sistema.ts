@@ -1,18 +1,24 @@
-// La única parte que toca la máquina: corre ps y lsof, y manda señales. El resto es src/procesos.ts.
+// La única parte que toca la máquina: corre ps (y lsof en macOS; en Linux lee /proc) y manda
+// señales. El resto es src/procesos.ts.
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { access, readdir, readFile, readlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import {
   agrupar,
   COLUMNAS_PS,
   armarFoto,
   cerrables,
+  cpuReciente,
+  cpuSegDeStat,
   cwdsDeLsof,
+  escuchasDeProcNet,
   leerInfoClaude,
   mismoProceso,
   parsearPs,
   pidsRelevantes,
   puertosDeLsof,
+  puertosDeSockets,
+  type CpuLeida,
   type Fila,
   type InfoClaude,
   type Memoria
@@ -20,6 +26,8 @@ import {
 import type { Foto, Objetivo, ResultadoCierre, Senal } from './tipos'
 
 export type Opciones = { horasSesionLarga: number }
+
+const LINUX = process.platform === 'linux'
 
 /** Corre un comando y devuelve su salida. lsof sale con 1 si algún pid ya no existe: si imprimió
  *  algo, eso vale. */
@@ -32,6 +40,7 @@ function correr(comando: string, args: readonly string[], timeout = 15_000): Pro
       (error, stdout) => {
         if (error && (typeof error.code !== 'number' || !stdout)) {
           if (typeof error.code === 'number') resolve('')
+          else if (error.code === 'ENOENT') reject(new Error(`No encontré ${comando}${LINUX ? ' (viene en el paquete procps)' : ''}.`))
           else reject(error)
           return
         }
@@ -39,6 +48,80 @@ function correr(comando: string, args: readonly string[], timeout = 15_000): Pro
       }
     )
   })
+}
+
+const existe = (ruta: string): Promise<boolean> => access(ruta).then(() => true, () => false)
+
+let rutaPs: string | null = null
+
+/** macOS siempre lo tiene en /bin. En Linux casi siempre está en /usr/bin o /bin; si no (NixOS),
+ *  el del PATH. */
+async function ps(): Promise<string> {
+  if (!rutaPs) {
+    rutaPs = '/bin/ps'
+    if (LINUX) rutaPs = (await existe('/usr/bin/ps')) ? '/usr/bin/ps' : (await existe('/bin/ps')) ? '/bin/ps' : 'ps'
+  }
+  return rutaPs
+}
+
+let ticks: Promise<number> | null = null
+
+/** Las unidades de /proc/<pid>/stat. Es 100 en todas las arquitecturas comunes, pero se pregunta. */
+function ticksPorSegundo(): Promise<number> {
+  ticks ??= correr('getconf', ['CLK_TCK'], 2000)
+    .then((s) => Number(s.trim()))
+    .then((n) => (Number.isFinite(n) && n > 0 ? n : 100), () => 100)
+  return ticks
+}
+
+/** Las lecturas de CPU anteriores, para que el %CPU de Linux sea el reciente y no el de toda la
+ *  vida del proceso. Las comparten las muestras y las revisiones completas. */
+let cpuLeida: CpuLeida = new Map()
+
+/** Linux: el tiempo de CPU de los procesos del usuario con centésimas, de /proc. ps solo da
+ *  segundos enteros y con eso la CPU entre dos muestras de 5 s salta de a 20 %. */
+async function cpuDeProc(filas: Fila[], yo: number): Promise<void> {
+  const hz = await ticksPorSegundo()
+  await Promise.all(
+    filas
+      .filter((f) => f.uid === yo)
+      .map(async (f) => {
+        const stat = await readFile(`/proc/${f.pid}/stat`, 'utf8').catch(() => null)
+        const seg = stat ? cpuSegDeStat(stat, hz) : null
+        if (seg !== null) f.cpuSeg = seg
+      })
+  )
+}
+
+/** Linux, en vez de `lsof -iTCP -sTCP:LISTEN`: los sockets en escucha de /proc/net y, de cada
+ *  pid, cuáles de sus descriptores son esos sockets. */
+async function puertosDeProc(pids: readonly number[]): Promise<Map<number, number[]>> {
+  if (!pids.length) return new Map()
+  const tablas = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map((r) => readFile(r, 'utf8').catch(() => '')))
+  const escuchas = escuchasDeProcNet(...tablas)
+  if (!escuchas.size) return new Map()
+  const fds = new Map<number, string[]>()
+  await Promise.all(
+    pids.map(async (pid) => {
+      const dir = `/proc/${pid}/fd`
+      const nombres = await readdir(dir).catch(() => [] as string[])
+      const destinos = await Promise.all(nombres.map((n) => readlink(`${dir}/${n}`).catch(() => '')))
+      fds.set(pid, destinos.filter((d) => d.startsWith('socket:')))
+    })
+  )
+  return puertosDeSockets(fds, escuchas)
+}
+
+/** Linux, en vez de `lsof -d cwd`: el enlace /proc/<pid>/cwd. */
+async function cwdsDeProc(pids: readonly number[]): Promise<Map<number, string>> {
+  const cwds = new Map<number, string>()
+  await Promise.all(
+    pids.map(async (pid) => {
+      const ruta = await readlink(`/proc/${pid}/cwd`).catch(() => null)
+      if (ruta) cwds.set(pid, ruta.replace(/ \(deleted\)$/, ''))
+    })
+  )
+  return cwds
 }
 
 /** Claude Code escribe `<config>/sessions/<pid>.json` con el nombre, el id y el estado de cada
@@ -58,29 +141,46 @@ async function infosDeClaude(pids: readonly number[]): Promise<Map<number, InfoC
 
 /** Todos los procesos de la máquina, con `ps`. Lo usan la revisión completa y las muestras. */
 export async function leerFilas(ahora: number): Promise<Fila[]> {
-  const [ps, comm] = await Promise.all([
-    correr('/bin/ps', ['-axww', '-o', COLUMNAS_PS]),
-    correr('/bin/ps', ['-ax', '-o', 'pid=,comm='])
+  if (!LINUX) {
+    const [salida, comm] = await Promise.all([
+      correr('/bin/ps', ['-axww', '-o', COLUMNAS_PS]),
+      correr('/bin/ps', ['-ax', '-o', 'pid=,comm='])
+    ])
+    return parsearPs(salida, comm, ahora)
+  }
+  const bin = await ps()
+  const [salida, comm] = await Promise.all([
+    correr(bin, ['-e', '-ww', '-o', COLUMNAS_PS]),
+    correr(bin, ['-e', '-o', 'pid=,comm='])
   ])
-  return parsearPs(ps, comm, ahora)
+  const filas = parsearPs(salida, comm, ahora, 'linux')
+  await cpuDeProc(filas, process.getuid())
+  cpuLeida = cpuReciente(filas, cpuLeida, ahora)
+  return filas
 }
 
 export const uid = (): number => process.getuid()
+
+async function puertosConLsof(pids: readonly number[]): Promise<Map<number, number[]>> {
+  if (!pids.length) return new Map()
+  return puertosDeLsof(await correr('/usr/sbin/lsof', ['-nP', '-a', '-p', pids.join(','), '-iTCP', '-sTCP:LISTEN', '-F', 'pn']))
+}
+
+async function cwdsConLsof(pids: readonly number[]): Promise<Map<number, string>> {
+  if (!pids.length) return new Map()
+  return cwdsDeLsof(await correr('/usr/sbin/lsof', ['-nP', '-a', '-p', pids.join(','), '-d', 'cwd', '-F', 'pn']))
+}
 
 export async function tomarFoto(memoria: Memoria, opciones: Opciones): Promise<{ foto: Foto; memoria: Memoria }> {
   const ahora = Date.now()
   const agrupacion = agrupar(await leerFilas(ahora), memoria, process.getuid())
   const relevantes = pidsRelevantes(agrupacion)
-  const [escuchando, carpetas, infos] = await Promise.all([
-    relevantes.puertos.length
-      ? correr('/usr/sbin/lsof', ['-nP', '-a', '-p', relevantes.puertos.join(','), '-iTCP', '-sTCP:LISTEN', '-F', 'pn'])
-      : Promise.resolve(''),
-    relevantes.cwds.length
-      ? correr('/usr/sbin/lsof', ['-nP', '-a', '-p', relevantes.cwds.join(','), '-d', 'cwd', '-F', 'pn'])
-      : Promise.resolve(''),
+  const [puertos, cwds, infos] = await Promise.all([
+    LINUX ? puertosDeProc(relevantes.puertos) : puertosConLsof(relevantes.puertos),
+    LINUX ? cwdsDeProc(relevantes.cwds) : cwdsConLsof(relevantes.cwds),
     infosDeClaude(agrupacion.raices.map((r) => r.fila.pid))
   ])
-  return armarFoto(agrupacion, puertosDeLsof(escuchando), cwdsDeLsof(carpetas), memoria, {
+  return armarFoto(agrupacion, puertos, cwds, memoria, {
     ahora,
     horasSesionLarga: opciones.horasSesionLarga,
     home: homedir()

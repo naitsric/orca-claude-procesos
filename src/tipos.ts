@@ -38,7 +38,7 @@ export type Proceso = {
   puertos: number[]
   veredicto: Veredicto
   motivo: string
-  /** Colgaba de launchd aunque su sesión sigue viva: sobrevivirá cuando la cierres. */
+  /** Colgaba de launchd (o de systemd en Linux) aunque su sesión sigue viva: sobrevivirá cuando la cierres. */
   desacoplado?: boolean
 }
 

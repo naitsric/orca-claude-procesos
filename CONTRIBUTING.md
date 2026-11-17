@@ -33,16 +33,17 @@ orca plugin check .                 # render the panel with the real worker and 
 orca plugin validate .              # manifest
 ```
 
-`orca plugin test` runs the worker tests against the real `ps` and `lsof` of
-your machine, so they check the shape of the result and not its numbers. The
-logic and panel tests run against a made-up system in `src/fixtures.ts`.
+`orca plugin test` runs the worker tests against the real `ps` and `lsof` (or
+`/proc` on Linux) of your machine, so they check the shape of the result and not
+its numbers. The logic and panel tests run against a made-up system in
+`src/fixtures.ts`, and `src/linux.test.ts` against a made-up Linux desktop.
 
 ## How the code is organized
 
 | File | What it does |
 | --- | --- |
-| `src/procesos.ts` | Pure logic. Parses `ps` and `lsof` output, groups processes by session, finds orphans, assigns verdicts and keeps the record that survives between checks. |
-| `src/sistema.ts` | The only code that touches the machine. Runs `ps` and `lsof`, reads `~/.claude/sessions/`, sends signals. |
+| `src/procesos.ts` | Pure logic. Parses `ps` and `lsof` output (and `/proc` on Linux), groups processes by session, finds orphans, assigns verdicts and keeps the record that survives between checks. |
+| `src/sistema.ts` | The only code that touches the machine. Runs `ps`, and `lsof` on macOS or reads `/proc` on Linux; reads `~/.claude/sessions/`, sends signals. |
 | `src/worker.ts` | Checks on an interval and saves the record to storage. Answers the panel and updates the status bar and notifications. |
 | `src/panel.tsx` | The sessions panel (Orca components). |
 | `src/graficas.ts` | The Actividad panel: HTML and SVG charts, since Orca's components have none. |

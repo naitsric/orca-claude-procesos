@@ -1,5 +1,6 @@
-// Lógica pura: de la salida de ps y lsof a una Foto. No toca el sistema, así se prueba en Node
-// con texto fijo. El worker (src/sistema.ts) corre los comandos y le pasa lo que imprimen.
+// Lógica pura: de la salida de ps y lsof (o de /proc, en Linux) a una Foto. No toca el sistema,
+// así se prueba en Node con texto fijo. El worker (src/sistema.ts) corre los comandos y lee los
+// archivos, y le pasa lo que obtiene.
 import { carpeta, duracion, memoria as fmtMem, puertos as fmtPuertos } from './formato'
 import type { Certeza, Foto, Huerfano, Proceso, Rol, Sesion, Totales, Veredicto } from './tipos'
 
@@ -25,6 +26,9 @@ export type Fila = {
   /** Ruta o nombre del ejecutable (`ps -o comm`). */
   comm: string
   comando: string
+  /** Ya murió y espera a que su padre lo recoja: no se muestra ni se cierra, pero su grupo y su
+   *  linaje cuentan (un shell zombi es lo que ata a la sesión el servidor que dejó corriendo). */
+  zombi?: true
 }
 
 /** Lo que el plugin recuerda entre revisiones, en `storage`. Es lo que permite reconocer a un
@@ -138,7 +142,9 @@ const LINEA_PS = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+([
 // ps -ax -o pid=,comm=
 const LINEA_COMM = /^\s*(\d+)\s+(.*)$/
 
-export function parsearPs(salidaPs: string, salidaComm: string, ahora: number): Fila[] {
+export type SistemaOperativo = 'darwin' | 'linux'
+
+export function parsearPs(salidaPs: string, salidaComm: string, ahora: number, sistema: SistemaOperativo = 'darwin'): Fila[] {
   const comms = new Map<number, string>()
   for (const linea of salidaComm.split('\n')) {
     const m = LINEA_COMM.exec(linea)
@@ -150,6 +156,7 @@ export function parsearPs(salidaPs: string, salidaComm: string, ahora: number): 
     if (!m) continue
     const pid = Number(m[1])
     const comando = m[10].trim()
+    const comm = comms.get(pid) ?? comando.split(/\s+/)[0] ?? ''
     filas.push({
       pid,
       ppid: Number(m[2]),
@@ -160,11 +167,103 @@ export function parsearPs(salidaPs: string, salidaComm: string, ahora: number): 
       rssKb: Number(m[7]),
       cpu: Number(m[8].replace(',', '.')),
       cpuSeg: segundosDeTiempo(m[9]),
-      comm: comms.get(pid) ?? comando.split(/\s+/)[0] ?? '',
-      comando
+      comm: sistema === 'linux' ? commDeLinux(comm, comando) : comm,
+      comando,
+      ...(comando.endsWith('<defunct>') ? { zombi: true as const } : {})
     })
   }
   return filas
+}
+
+// ---------------------------------------------------------------------------------------------
+// Linux: ps da otro comm y CPU en segundos enteros, y lsof casi nunca está; /proc tiene lo demás
+
+/** Lo que el kernel guarda como nombre del proceso: 15 caracteres como mucho. */
+const LARGO_COMM_LINUX = 15
+
+/**
+ * En Linux `ps -o comm` es el nombre del proceso cortado a 15 caracteres y sin ruta. Para leerlo
+ * como el de macOS: la ruta del ejecutable si el comando empieza por él, o el título completo si
+ * el proceso se lo cambió (`npm exec @playwright/mcp@latest` llega como `npm exec @playw`).
+ */
+export function commDeLinux(comm: string, comando: string): string {
+  const primero = comando.split(/\s+/)[0] ?? ''
+  const nombre = base(primero)
+  if (!comm || nombre === comm) return primero || comm
+  if (comm.length >= LARGO_COMM_LINUX) {
+    if (nombre.startsWith(comm)) return primero
+    if (comando.startsWith(comm)) return comando
+  }
+  return comm
+}
+
+/** `/proc/<pid>/stat`: la CPU usada (utime + stime) en segundos, con la precisión del reloj del
+ *  kernel. El nombre va entre paréntesis y puede tener espacios: se cuenta desde el último `)`. */
+export function cpuSegDeStat(stat: string, ticksPorSeg = 100): number | null {
+  const cierre = stat.lastIndexOf(')')
+  if (cierre < 0) return null
+  // Tras el nombre vienen el campo 3 (estado) en adelante: utime es el 14 y stime el 15.
+  const campos = stat.slice(cierre + 2).trim().split(/\s+/)
+  const utime = Number(campos[11])
+  const stime = Number(campos[12])
+  if (!Number.isFinite(utime) || !Number.isFinite(stime) || ticksPorSeg <= 0) return null
+  return (utime + stime) / ticksPorSeg
+}
+
+/** La última lectura de CPU de cada proceso y el uso que se calculó con ella. */
+export type CpuLeida = Map<number, { inicio: number; cpuSeg: number; t: number; cpu: number }>
+
+/**
+ * En Linux el %CPU de ps es el promedio desde que el proceso arrancó: una sesión que trabajó una
+ * hora y lleva otra quieta sigue marcando 50 %. Con una lectura anterior de al menos `minimoMs`
+ * se calcula el uso reciente, como el que da macOS. Cambia `cpu` en las filas y devuelve lo que
+ * hay que recordar para la próxima.
+ */
+export function cpuReciente(filas: Fila[], previa: CpuLeida, ahora: number, minimoMs = 2000): CpuLeida {
+  const nueva: CpuLeida = new Map()
+  for (const f of filas) {
+    const p = previa.get(f.pid)
+    if (p && mismoInicio(p.inicio, f.inicio) && ahora - p.t < minimoMs) {
+      // Muy poco tiempo para medir: se queda el último valor y la lectura de referencia.
+      f.cpu = p.cpu
+      nueva.set(f.pid, p)
+      continue
+    }
+    if (p && mismoInicio(p.inicio, f.inicio)) {
+      f.cpu = Math.round(Math.max(0, ((f.cpuSeg - p.cpuSeg) / ((ahora - p.t) / 1000)) * 100) * 10) / 10
+    }
+    nueva.set(f.pid, { inicio: f.inicio, cpuSeg: f.cpuSeg, t: ahora, cpu: f.cpu })
+  }
+  return nueva
+}
+
+/** `/proc/net/tcp` y `tcp6`: el inodo de cada socket en escucha (estado 0A) y su puerto. */
+export function escuchasDeProcNet(...tablas: string[]): Map<string, number> {
+  const escuchas = new Map<string, number>()
+  for (const tabla of tablas) {
+    for (const linea of tabla.split('\n').slice(1)) {
+      const c = linea.trim().split(/\s+/)
+      if (c.length < 10 || c[3] !== '0A' || c[9] === '0') continue
+      const puerto = parseInt(c[1].slice(c[1].lastIndexOf(':') + 1), 16)
+      if (Number.isFinite(puerto) && puerto > 0) escuchas.set(c[9], puerto)
+    }
+  }
+  return escuchas
+}
+
+/** De los destinos de `/proc/<pid>/fd/*` (`socket:[123]`) a los puertos en que escucha cada pid. */
+export function puertosDeSockets(fds: Map<number, readonly string[]>, escuchas: Map<string, number>): Map<number, number[]> {
+  const puertos = new Map<number, number[]>()
+  for (const [pid, destinos] of fds) {
+    const lista = new Set<number>()
+    for (const d of destinos) {
+      const m = /^socket:\[(\d+)\]$/.exec(d)
+      const puerto = m ? escuchas.get(m[1]) : undefined
+      if (puerto !== undefined) lista.add(puerto)
+    }
+    if (lista.size) puertos.set(pid, [...lista].sort((a, b) => a - b))
+  }
+  return puertos
 }
 
 /** `lsof -F pn`: líneas `p<pid>` seguidas de `n<nombre>`. Devuelve los nombres por pid. */
@@ -221,13 +320,24 @@ function esTunel(f: Fila): boolean {
 }
 
 function esNavegador(f: Fila): boolean {
-  return /Google Chrome for Testing|Chromium|chrome-headless-shell|headless_shell|ms-playwright|\/Google Chrome\.app\//.test(f.comando)
+  return /Google Chrome for Testing|Chromium|chromium|chrome-headless-shell|headless_shell|ms-playwright|\/Google Chrome\.app\/|\/opt\/google\/chrome\//.test(f.comando)
 }
 
 /** Para huérfanos sin otra pista: un servidor MCP suelto que no es de una app instalada. */
 function pareceMcp(f: Fila): boolean {
   if (!/mcp/i.test(f.comando)) return false
-  return !/^\/(Applications|System|usr\/(libexec|sbin))\//.test(f.comando) && !f.comando.includes('Application Support/orca')
+  if (/^\/(Applications|System|usr\/(libexec|sbin))\//.test(f.comando)) return false
+  // Los de Orca: ~/Library/Application Support/orca en macOS, ~/.config/orca en Linux.
+  return !/Application Support\/orca|\/\.config\/orca\//i.test(f.comando)
+}
+
+/**
+ * Quién adopta a un proceso cuando su padre muere: launchd o init (pid 1) y, en los escritorios
+ * Linux, el `systemd --user` de la sesión, que se declara subreaper y recibe a los huérfanos de
+ * todo lo que arrancó (la terminal, el editor, Orca).
+ */
+function esAdoptivo(f: Fila): boolean {
+  return f.pid === 1 || (base(f.comm) === 'systemd' && /\s--user\b/.test(f.comando))
 }
 
 /** Hijos directos de `claude` que no son servidores MCP: los lanza la propia CLI un momento. */
@@ -291,15 +401,23 @@ export function nombreDe(f: Fila, rol: Rol): string {
 }
 
 const ANFITRIONES: ReadonlyArray<[RegExp, string]> = [
-  [/Orca Terminal Host|\/Orca\.app\/|orca-tcc-login/, 'Orca'],
+  // En Linux las terminales de Orca cuelgan de su propio binario corriendo daemon-entry.js.
+  [/Orca Terminal Host|\/Orca\.app\/|orca-tcc-login|\/opt\/Orca\/|\/\.mount_Orca|[Oo]rca.*daemon-entry/, 'Orca'],
   [/ghostty/i, 'Ghostty'],
   [/\/Terminal\.app\//, 'Terminal'],
   [/iTerm/, 'iTerm2'],
   [/\/Claude\.app\//, 'Claude Desktop'],
-  [/Visual Studio Code|\/Code Helper/, 'VS Code'],
-  [/\/Cursor\.app\//, 'Cursor'],
-  [/\/Warp\.app\//, 'Warp'],
+  [/Visual Studio Code|\/Code Helper|\/share\/code\/code\b/, 'VS Code'],
+  [/\/Cursor\.app\/|\/\.mount_Cursor|\/(opt|share)\/cursor\/cursor\b/, 'Cursor'],
+  [/\/Warp\.app\/|\bwarp-terminal\b/, 'Warp'],
   [/wezterm/i, 'WezTerm'],
+  [/gnome-terminal/, 'GNOME Terminal'],
+  [/\bkonsole\b/, 'Konsole'],
+  [/\bkitty\b/, 'kitty'],
+  [/alacritty/i, 'Alacritty'],
+  [/\bptyxis\b/, 'Ptyxis'],
+  [/\btilix\b/, 'Tilix'],
+  [/\bxterm\b/, 'xterm'],
   [/\btmux\b/, 'tmux']
 ]
 
@@ -318,8 +436,10 @@ export type Agrupacion = {
   desacoplados: Set<number>
   /** Procesos cuya sesión ya no existe (o que solo se parecen a algo de Claude). */
   huerfanos: Map<number, { certeza: Certeza; sesion: string | null }>
-  /** Los huérfanos de arriba (cuelgan de launchd), en orden de inicio. */
+  /** Los huérfanos de arriba (cuelgan de un adoptivo), en orden de inicio. */
   topes: number[]
+  /** Los pids que adoptan huérfanos: 1 y, en Linux, `systemd --user`. */
+  adoptivos: Set<number>
 }
 
 function claveDeSesion(memoria: Memoria, f: Fila): string {
@@ -357,7 +477,7 @@ export function agrupar(filas: Fila[], memoria: Memoria, uid: number): Agrupacio
   const raices: Agrupacion['raices'] = []
   const clavePorRaiz = new Map<number, string>()
   for (const f of filas) {
-    if (f.uid !== uid || !esClaude(f) || raizDe(f.pid) !== null) continue
+    if (f.uid !== uid || f.zombi || !esClaude(f) || raizDe(f.pid) !== null) continue
     const clave = claveDeSesion(memoria, f)
     raices.push({ fila: f, clave })
     clavePorRaiz.set(f.pid, clave)
@@ -388,8 +508,9 @@ export function agrupar(filas: Fila[], memoria: Memoria, uid: number): Agrupacio
   const desacoplados = new Set<number>()
   const huerfanos: Agrupacion['huerfanos'] = new Map()
   const topes: number[] = []
+  const adoptivos = new Set([1, ...filas.filter(esAdoptivo).map((f) => f.pid)])
   const candidatos = filas
-    .filter((f) => f.ppid === 1 && f.uid === uid && !esClaude(f))
+    .filter((f) => adoptivos.has(f.ppid) && f.uid === uid && !f.zombi && !esClaude(f) && !esAdoptivo(f))
     .sort((a, b) => a.inicio - b.inicio)
 
   for (const f of candidatos) {
@@ -426,7 +547,7 @@ export function agrupar(filas: Fila[], memoria: Memoria, uid: number): Agrupacio
     }
   }
 
-  return { porPid, hijos, uid, raices, dueno, desacoplados, huerfanos, topes }
+  return { porPid, hijos, uid, raices, dueno, desacoplados, huerfanos, topes, adoptivos }
 }
 
 /** Para qué pids pedirle a lsof puertos y carpetas. */
@@ -435,7 +556,7 @@ export function pidsRelevantes(a: Agrupacion): { puertos: number[]; cwds: number
   const cwds = new Set<number>([...a.raices.map((r) => r.fila.pid), ...a.topes])
   for (const p of a.desacoplados) {
     const f = a.porPid.get(p)
-    if (f?.ppid === 1) cwds.add(p)
+    if (f && a.adoptivos.has(f.ppid)) cwds.add(p)
   }
   return { puertos: [...puertos], cwds: [...cwds] }
 }
@@ -497,7 +618,8 @@ function anfitrionDe(f: Fila, porPid: Map<number, Fila>): string {
     if (actual.ppid <= 1 || actual.ppid === actual.pid) break
     actual = porPid.get(actual.ppid)
   }
-  return f.tty === '??' ? 'Sin terminal' : 'Otra terminal'
+  // Sin terminal: `??` en macOS, `?` en Linux.
+  return /^\?+$/.test(f.tty) ? 'Sin terminal' : 'Otra terminal'
 }
 
 export function armarFoto(
@@ -555,7 +677,7 @@ export function armarFoto(
   /** Recorre en profundidad, con nivel, solo los pids que cumplan `incluir`. */
   const recorrer = (pid: number, nivel: number, incluir: (p: number) => boolean, salida: number[][]): void => {
     for (const h of a.hijos.get(pid) ?? []) {
-      if (!incluir(h)) continue
+      if (!incluir(h) || a.porPid.get(h)?.zombi) continue
       salida.push([h, nivel])
       recorrer(h, nivel + 1, incluir, salida)
     }
@@ -566,9 +688,10 @@ export function armarFoto(
     const filas: number[][] = []
     recorrer(f.pid, 0, (p) => a.dueno.get(p) === clave && !a.desacoplados.has(p), filas)
     const procesos = filas.map(([pid, nivel]) => proceso(pid, nivel, false))
-    // Los desacoplados cuelgan de launchd: van al final, cada uno con su subárbol.
+    // Los desacoplados cuelgan de un adoptivo: van al final, cada uno con su subárbol.
     for (const pid of a.desacoplados) {
-      if (a.dueno.get(pid) !== clave || a.porPid.get(pid)?.ppid !== 1) continue
+      const padre = a.porPid.get(pid)?.ppid
+      if (a.dueno.get(pid) !== clave || padre === undefined || !a.adoptivos.has(padre)) continue
       procesos.push(proceso(pid, 0, true))
       const debajo: number[][] = []
       recorrer(pid, 1, (p) => a.desacoplados.has(p), debajo)
@@ -584,7 +707,7 @@ export function armarFoto(
     const larga = config.horasSesionLarga * UNA_HORA
     let veredicto: Veredicto = 'dejar'
     let motivo: string
-    if (f.ppid === 1) {
+    if (a.adoptivos.has(f.ppid)) {
       veredicto = 'revisar'
       motivo = 'Sesión sin terminal ni proceso padre: quedó sola.'
     } else if (info?.estado) {

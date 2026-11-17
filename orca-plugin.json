@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "claude-procesos",
   "name": "Procesos de Claude",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Monitor de las sesiones de Claude Code, los procesos que lanzan y los que quedaron huérfanos, con el veredicto de cuáles cerrar.",
   "icon": "design/icon-256.png",
   "author": {
@@ -58,7 +58,7 @@
       {
         "key": "intervaloSegundos",
         "title": "Cada cuántos segundos revisar",
-        "description": "El worker corre ps y lsof con esta frecuencia mientras el plugin está activo.",
+        "description": "El worker revisa los procesos (ps, y lsof en macOS o /proc en Linux) con esta frecuencia mientras el plugin está activo.",
         "type": "integer",
         "default": 15,
         "minimum": 5,
