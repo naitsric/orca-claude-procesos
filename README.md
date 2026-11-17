@@ -63,6 +63,10 @@ isn't Claude's.
   session has a *Cerrar sesión* button, and safe orphans get a *Cerrar todos*
   notice. Both ask the same confirmation as the main panel, right where you
   clicked.
+- **Close only some processes and keep the session**: expand a session, tick
+  the processes you want gone (or *Marcar los que sobran* to tick the ones
+  nothing uses), and close just those. Their children go with them; the
+  session stays open.
 
 ### Find what outlived its session
 - **Orphans**: processes still running after their session ended, with the

@@ -14,6 +14,7 @@
 // vecinos, y los huérfanos llevan siempre ⚠ y su nombre. En claro, aguamarina y amarillo quedan
 // bajo 3:1 contra el fondo: por eso hay leyenda siempre y vista de tabla.
 import {
+  confirmarDeSesion,
   confirmarForzar,
   confirmarHuerfanos,
   confirmarSesion,
@@ -38,7 +39,7 @@ import {
   type Medida,
   type Serie
 } from './series'
-import type { Foto, Historial, Muestra, MuestraSesion, Sesion } from './tipos'
+import type { Foto, Historial, Muestra, MuestraSesion, Proceso, Sesion } from './tipos'
 
 const RANGOS = [5, 15, 30] as const
 const CLAVE_RANGO = 'graficas.rango'
@@ -57,6 +58,11 @@ let cerrando: string | null = null
 let hecho: Hecho | null = null
 /** El `data-foco` que debe quedar enfocado después del próximo repintado. */
 let enfocarDespues: string | null = null
+/** El botón que abrió la confirmación en curso: ahí vuelve el foco si se cancela. */
+let volverA: string | null = null
+/** Sesiones con su lista de procesos desplegada, y los procesos marcados en cada una (por pid). */
+const desplegadas = new Set<string>()
+const marcados = new Map<string, Set<number>>()
 
 // ---------------------------------------------------------------------------------------------
 // Estilos
@@ -153,6 +159,28 @@ th { font-weight: 600; color: var(--tinta-2); }
 .fila-sesion .aviso { color: var(--cuidado); }
 .fila-sesion + .fila-sesion { border-top: 1px solid var(--orca-border); padding-top: 8px; }
 .pie { font-size: 11px; color: var(--tinta-2); margin: 10px 0 0; }
+.desplegar {
+  font: inherit; font-size: 11px; color: var(--tinta-2); background: none; border: 0; border-radius: 4px;
+  padding: 2px 4px; margin: 4px 0 0 12px; cursor: pointer; display: inline-flex; gap: 4px; align-items: center;
+}
+.desplegar:hover { color: var(--tinta); background: var(--orca-accent); }
+.desplegar:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: 1px; }
+.desplegar .sobran { color: var(--cuidado); }
+.procs { margin: 4px 0 0 16px; border: 1px solid var(--orca-border); border-radius: 8px; padding: 4px 0; }
+.proc { display: flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.proc:hover { background: var(--orca-accent); }
+.proc.marcado { background: color-mix(in srgb, var(--peligro) 9%, transparent); }
+.proc input { margin: 0; flex: none; accent-color: var(--peligro); }
+.proc input:disabled + span { opacity: 0.6; }
+.proc .pnombre { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proc .pnombre small { color: var(--tinta-2); font-size: 11px; }
+.proc .pmem { color: var(--tinta-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.etiqueta { font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 4px; border: 1px solid; white-space: nowrap; flex: none; }
+.etiqueta.cerrar { color: var(--peligro); border-color: color-mix(in srgb, var(--peligro) 45%, transparent); }
+.etiqueta.revisar { color: var(--cuidado); border-color: color-mix(in srgb, var(--cuidado) 45%, transparent); }
+.procs .botones { padding: 6px 8px 2px; margin-top: 4px; border-top: 1px solid var(--orca-border); }
+.procs .ayuda { font-size: 11px; color: var(--tinta-2); padding: 2px 8px 4px; margin: 0; }
+.procs + .caja, .procs + .cerrando { margin-left: 16px; }
 .caja {
   border: 1px solid var(--orca-border); border-left: 3px solid var(--tinta-2); border-radius: 8px;
   padding: 8px 10px; margin-top: 8px; background: var(--superficie); font-size: 12px; overflow-wrap: anywhere;
@@ -585,7 +613,7 @@ function pintarSesiones(ultima: Muestra | undefined, colores: Record<string, num
     el(
       'p',
       { class: 'pie' },
-      'Para cerrar un solo proceso de una sesión (un servidor MCP, un comando) usa el panel «Procesos de Claude» de la barra lateral.'
+      'Despliega una sesión para cerrar solo algunos de sus procesos sin cerrarla. El detalle de cada uno está en el panel «Procesos de Claude».'
     )
   )
   raiz.sesiones.replaceChildren(...hijos)
@@ -619,12 +647,100 @@ function filaSesion(x: Sesion, enVivo: MuestraSesion | undefined, colores: Recor
     el(
       'div',
       { class: 'sub' },
-      `${estadoCorto(x, Date.now())} · ${plural(x.procesos.length, 'proceso', 'procesos')} · `,
+      // Cuántos procesos lo dice «Ver sus procesos (N)» justo debajo.
+      `${estadoCorto(x, Date.now())} · ${x.procesos.length ? '' : 'sin procesos · '}`,
       el('b', {}, memoria(mem)),
       ` · ${pct(cpu)}`
     ),
     el('div', { class: 'pista' }, el('div', { style: `width:${Math.min(1, mem / max) * 100}%;background:${c}` })),
+    x.procesos.length ? desplegar(x, clave) : null,
+    x.procesos.length && desplegadas.has(clave) ? listaProcesos(x, clave, home) : null,
     accion(clave)
+  )
+}
+
+/** «▸ Ver sus procesos (11) · 2 sobran»: abre o cierra la lista de procesos de la sesión. */
+function desplegar(x: Sesion, clave: string): HTMLElement {
+  const abierta = desplegadas.has(clave)
+  const sobran = x.procesos.filter((p) => p.veredicto === 'cerrar').length
+  const b = el(
+    'button',
+    { type: 'button', class: 'desplegar', 'aria-expanded': String(abierta), 'data-foco': `ver-${clave}` },
+    `${abierta ? '▾ Ocultar' : '▸ Ver'} sus procesos (${x.procesos.length})`,
+    sobran ? el('span', { class: 'sobran' }, `· ${sobran} ${sobran === 1 ? 'sobra' : 'sobran'}`) : null
+  )
+  b.addEventListener('click', () => {
+    if (abierta) desplegadas.delete(clave)
+    else desplegadas.add(clave)
+    pintar()
+  })
+  return b
+}
+
+/** El veredicto de cada proceso, en palabras: «sobra» no le sirve a nadie, «revisar» decide tú. */
+const ETIQUETA: Partial<Record<Proceso['veredicto'], string>> = { cerrar: 'sobra', revisar: 'revisar' }
+
+/** Los procesos de la sesión con una casilla cada uno, para cerrar solo esos y dejar la sesión. */
+function listaProcesos(x: Sesion, clave: string, home: string): HTMLElement {
+  const vivos = new Set(x.procesos.map((p) => p.pid))
+  const marc = new Set([...(marcados.get(clave) ?? [])].filter((pid) => vivos.has(pid)))
+  marcados.set(clave, marc)
+  const elegidos = x.procesos.filter((p) => marc.has(p.pid))
+  const sobran = x.procesos.filter((p) => p.veredicto === 'cerrar')
+  // Mientras se pregunta o se cierra, la selección no cambia: es la que se va a cerrar.
+  const bloqueada = cerrando !== null || pendiente?.origen === clave
+  const filas = x.procesos.map((p) => {
+    const id = `p-${p.pid}`
+    const casilla = el('input', { type: 'checkbox', id, 'data-foco': id })
+    casilla.checked = marc.has(p.pid)
+    casilla.disabled = bloqueada
+    casilla.addEventListener('change', () => {
+      if (hecho?.origen === clave) hecho = null
+      if (casilla.checked) marc.add(p.pid)
+      else marc.delete(p.pid)
+      pintar()
+    })
+    const tag = ETIQUETA[p.veredicto]
+    return el(
+      'label',
+      { class: `proc${marc.has(p.pid) ? ' marcado' : ''}`, for: id, title: `${p.motivo}\n${p.comando}` },
+      casilla,
+      el(
+        'span',
+        { class: 'pnombre', style: p.nivel > 1 ? `padding-left:${(p.nivel - 1) * 10}px` : '' },
+        p.nivel > 1 ? '└ ' : '',
+        p.nombre,
+        p.puertos.length ? el('small', {}, ` ${puertos(p.puertos)}`) : null
+      ),
+      tag ? el('span', { class: `etiqueta ${p.veredicto}` }, tag) : null,
+      el('span', { class: 'pmem' }, memoria(p.rssKb))
+    )
+  })
+  const todasSobran = sobran.length > 0 && sobran.every((p) => marc.has(p.pid)) && marc.size === sobran.length
+  return el(
+    'div',
+    { class: 'procs', role: 'group', 'aria-label': `Procesos de ${nombreSesion(x, home)}` },
+    ...filas,
+    activo(clave)
+      ? null
+      : el(
+          'div',
+          { class: 'botones' },
+          boton(
+            elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados',
+            'suave',
+            () => pedir(confirmarDeSesion(x, elegidos, home), `cerrar-sel-${clave}`),
+            { foco: `cerrar-sel-${clave}`, detener: true, deshabilitado: !elegidos.length || cerrando !== null }
+          ),
+          sobran.length && !todasSobran
+            ? boton(`Marcar los que sobran (${sobran.length})`, 'fantasma', () => {
+                marcados.set(clave, new Set(sobran.map((p) => p.pid)))
+                enfocarDespues = `cerrar-sel-${clave}`
+                pintar()
+              }, { foco: `marcar-${clave}` })
+            : null
+        ),
+    activo(clave) ? null : el('p', { class: 'ayuda' }, 'La sesión sigue abierta; solo se cierran los marcados (y sus hijos).')
   )
 }
 
@@ -774,10 +890,11 @@ function activo(origen: string): boolean {
   return pendiente?.origen === origen || cerrando === origen || hecho?.origen === origen
 }
 
-function pedir(p: Pendiente | null): void {
+function pedir(p: Pendiente | null, desde?: string): void {
   if (!p) return
   hecho = null
   pendiente = p
+  volverA = desde ?? null
   // El foco va a la opción que no cierra nada, como en los diálogos de macOS.
   enfocarDespues = `no-${p.origen}`
   pintar()
@@ -795,6 +912,7 @@ async function ejecutar(p: Pendiente): Promise<void> {
     )
     foto = r.foto
     hecho = { origen: p.origen, titulo: p.hecho, lista: r.resultados }
+    marcados.delete(p.origen)
   } catch (error) {
     hecho = { origen: p.origen, titulo: p.hecho, lista: [], error: mensaje(error) }
   } finally {
@@ -821,7 +939,7 @@ function confirmacion(p: Pendiente): HTMLElement {
         'fantasma',
         () => {
           pendiente = null
-          enfocarDespues = p.origen === 'huerfanos' ? 'cerrar-huerfanos' : `cerrar-${p.origen}`
+          enfocarDespues = volverA ?? (p.origen === 'huerfanos' ? 'cerrar-huerfanos' : `cerrar-${p.origen}`)
           pintar()
         },
         { foco: `no-${p.origen}` }

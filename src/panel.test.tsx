@@ -106,6 +106,30 @@ test('cerrar una sesión pregunta dentro de su tarjeta', async () => {
   await view.unmount()
 })
 
+test('cerrar solo los procesos que sobran deja la sesión abierta', async () => {
+  const foto = fotoDePrueba()
+  const s = foto.sesiones[0]
+  const sobra = s.procesos.find((p) => p.nivel === 1 && p.rol !== 'mcp') ?? s.procesos[0]
+  const conSobra: Foto = {
+    ...foto,
+    sesiones: [{ ...s, procesos: s.procesos.map((p) => (p.pid === sobra.pid ? { ...p, veredicto: 'cerrar' as const } : p)) }]
+  }
+  const pedidos: Pedido[] = []
+  const view = await mount(panel, { host: hostCon(conSobra, pedidos) })
+  await view.toggle({ type: 'Collapsible' })
+  await view.press({ text: 'Marcar los que sobran' })
+  await view.press({ text: 'Cerrar 1 seleccionado' })
+  const tarjeta = texto(buscar(view.tree(), 'Collapsible'))
+  assert.ok(tarjeta.includes('¿Cerrar 1 proceso de «mi-app-c7»?'))
+  assert.ok(tarjeta.includes('La sesión sigue abierta.'))
+  await view.press({ text: 'Cerrar 1 proceso' })
+  assert.equal(pedidos.length, 1)
+  assert.deepEqual(pedidos[0].objetivos.map((o) => o.pid), [sobra.pid], 'solo el que sobra, no la sesión')
+  assert.ok(!pedidos[0].objetivos.some((o) => o.pid === s.pid))
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
 test('cancelar no cierra nada', async () => {
   const pedidos: Pedido[] = []
   const view = await mount(panel, { host: hostCon(fotoDePrueba(), pedidos) })

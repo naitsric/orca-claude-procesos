@@ -245,6 +245,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
   const elegidos = s.procesos.filter((p) => marcados.has(String(p.pid)))
   const ahora = read(foto)?.tomadaEn ?? Date.now()
   const aviso = tieneAviso(s)
+  const sobran = s.procesos.filter((p) => p.veredicto === 'cerrar')
   // Con una confirmación pendiente la tarjeta se queda abierta: es donde está la pregunta.
   const abierta = (read(abiertas)[clave] ?? false) || activo(clave)
   return (
@@ -303,6 +304,16 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
             >
               {elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados'}
             </Button>
+            {sobran.length ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={ocupado}
+                onPress={() => update(seleccion, (sel) => ({ ...sel, [clave]: sobran.map((p) => String(p.pid)) }))}
+              >
+                Marcar los que sobran
+              </Button>
+            ) : null}
             <Button
               size="sm"
               tone="danger"
