@@ -15,7 +15,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-<!-- screenshot: docs/screenshot.png -->
+<p align="center">
+  <img src="docs/screenshot.png" width="360" alt="The Actividad de Claude panel: CPU and memory over the last 15 minutes, stacked by session, with a tooltip listing every session at one moment">
+</p>
 
 ## Why Procesos de Claude
 
@@ -44,6 +46,23 @@ isn't Claude's.
   `claude` runs.
 - Sessions running in any terminal (Orca, Ghostty, Terminal, iTerm2, VS Code)
   show up, not only Orca's.
+
+### Activity over time
+- **A second panel, Actividad de Claude**, in the spirit of Activity Monitor's
+  graphs: CPU and memory over the last 5, 15 or 30 minutes, stacked by session
+  and sampled every 5 seconds.
+- **Real CPU usage**, measured from each process's CPU time between samples.
+  It is not the smoothed average `ps` reports.
+- **A crosshair and tooltip** that list every session at that moment. Arrow
+  keys walk the timeline too.
+- **Where the memory is**: Claude itself, MCP servers, commands and servers,
+  browsers and orphans, ranked.
+- **Each session keeps its color** while it is on screen, and orphans are
+  always red with ⚠. A table view carries every value without relying on color.
+- **Close from the same view**, like Activity Monitor's stop button: every
+  session has a *Cerrar sesión* button, and safe orphans get a *Cerrar todos*
+  notice. Both ask the same confirmation as the main panel, right where you
+  clicked.
 
 ### Find what outlived its session
 - **Orphans**: processes still running after their session ended, with the
@@ -106,10 +125,13 @@ Requires **Orca 1.4.248 or later on macOS**, with plugins turned on
    orca plugin install naitsric/orca-claude-procesos --approve ap1-…
    ```
 
-3. **Open it** from Orca's right sidebar (**Procesos de Claude**), or with:
+3. **Open it** from Orca's right sidebar: **Procesos de Claude** has the
+   sessions and their processes, **Actividad de Claude** the graphs. Or from the
+   terminal:
 
    ```sh
    orca plugin open naitsric.claude-procesos --panel procesos
+   orca plugin open naitsric.claude-procesos --panel actividad
    ```
 
 The `orca` CLI ships inside the app. If your shell can't find it, use
@@ -160,6 +182,12 @@ record, or when it is a Bash tool shell, which carries the
 `~/.claude/shell-snapshots` marker. Orphans whose session ended before the
 plugin was installed can only be recognized by that marker; MCP servers among
 them show up as probable.
+
+**Graphs.** Every 5 seconds the worker takes a light sample with `ps` alone.
+It sums each session's memory and the CPU time its processes used since the
+previous sample. It keeps 30 minutes of samples and saves them once a minute,
+so the graphs survive a restart. Gaps in sampling show as gaps, never as
+interpolated lines.
 
 **Safety.** Every close goes through the worker. It takes a new snapshot and
 signals a process only if it is still there, belongs to your user and has the

@@ -3,12 +3,23 @@
 // sesión (eso es lo que delata a los huérfanos) y le avisa al panel y a la barra.
 import type { JsonValue } from 'orca'
 import type { OrcaWorkerApi } from 'orca/worker'
-import { memoria as fmtMem, plural, puertos as fmtPuertos } from './formato'
+import { carpeta, memoria as fmtMem, plural, puertos as fmtPuertos } from './formato'
+import {
+  agregarMuestra,
+  historialVacio,
+  INTERVALO_MUESTRA_MS,
+  leerHistorial,
+  tomarMuestra,
+  type CpuPrevia
+} from './historial'
 import { leerMemoria, mismoProceso, type Memoria } from './procesos'
-import { cerrar, tomarFoto, type Opciones } from './sistema'
-import type { Foto, Objetivo, ResultadoCierre, Senal } from './tipos'
+import { cerrar, leerFilas, tomarFoto, uid, type Opciones } from './sistema'
+import type { Foto, Historial, Objetivo, ResultadoCierre, Senal } from './tipos'
 
 const CLAVE_MEMORIA = 'memoria'
+const CLAVE_HISTORIAL = 'historial'
+/** El historial se guarda cada minuto, no en cada muestra. */
+const GUARDAR_CADA = Math.round(60_000 / INTERVALO_MUESTRA_MS)
 
 type Ajustes = Opciones & { intervaloSegundos: number; avisarHuerfanos: boolean }
 
@@ -19,6 +30,14 @@ let temporizador: ReturnType<typeof setTimeout> | null = null
 let detenido = false
 /** Huérfanos de los que ya se avisó, para no repetir la notificación en cada revisión. */
 let avisados: Objetivo[] = []
+
+// Gráficas: el historial de la última media hora y lo necesario para la próxima muestra.
+let historial: Historial | null = null
+let cpuPrevia: CpuPrevia = new Map()
+/** El nombre de cada sesión según la última revisión completa (las muestras no leen archivos). */
+let nombres = new Map<number, string>()
+let temporizadorMuestra: ReturnType<typeof setTimeout> | null = null
+let sinGuardar = 0
 
 function numero(valor: unknown, porDefecto: number, min: number, max: number): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? Math.min(max, Math.max(min, valor)) : porDefecto
@@ -69,6 +88,7 @@ async function publicar(orca: OrcaWorkerApi, foto: Foto, nueva: Memoria | null, 
       memoriaGuardada = texto
     }
   }
+  if (!foto.error) nombres = new Map(foto.sesiones.map((s) => [s.pid, s.nombre ?? carpeta(s.cwd, foto.home)]))
   orca.panels.post('procesos.foto', foto)
   await actualizarBarra(orca, foto)
   if (op.avisarHuerfanos) await avisar(orca, foto)
@@ -161,6 +181,38 @@ function resumen(foto: Foto): string {
   return partes.join(' ')
 }
 
+async function cargarHistorial(orca: OrcaWorkerApi): Promise<Historial> {
+  if (!historial) historial = leerHistorial(await orca.storage.get(CLAVE_HISTORIAL).catch(() => null), Date.now())
+  return historial
+}
+
+/** Una muestra liviana para las gráficas: solo ps, sin lsof ni archivos. */
+async function muestrear(orca: OrcaWorkerApi): Promise<void> {
+  const ahora = Date.now()
+  const filas = await leerFilas(ahora)
+  const { muestra, previa } = tomarMuestra(filas, await cargarMemoria(orca), uid(), cpuPrevia, nombres, ahora)
+  // La CPU real necesita dos lecturas: la primera tras arrancar solo sirve de referencia (el
+  // promedio de ps arrastra el último minuto y dibujaría un pico que no es de ahora).
+  const primera = cpuPrevia.size === 0
+  cpuPrevia = previa
+  if (primera) return
+  historial = agregarMuestra(await cargarHistorial(orca), muestra)
+  orca.panels.post('procesos.muestra', { muestra, colores: historial.colores })
+  if (++sinGuardar >= GUARDAR_CADA) {
+    sinGuardar = 0
+    await orca.storage.set(CLAVE_HISTORIAL, historial as unknown as JsonValue)
+  }
+}
+
+function cicloMuestras(orca: OrcaWorkerApi): void {
+  if (detenido) return
+  temporizadorMuestra = setTimeout(() => {
+    muestrear(orca)
+      .catch((e: unknown) => orca.log(`muestrear: ${String(e)}`))
+      .finally(() => cicloMuestras(orca))
+  }, INTERVALO_MUESTRA_MS)
+}
+
 function programar(orca: OrcaWorkerApi, segundos: number): void {
   if (temporizador) clearTimeout(temporizador)
   if (detenido) return
@@ -178,6 +230,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   detenido = false
   orca.panels.handle('procesos.foto', () => revisar(orca))
   orca.panels.handle('procesos.cerrar', ({ objetivos, senal, arbol }) => cerrarProcesos(orca, objetivos, senal, arbol))
+  orca.panels.handle('procesos.historial', async () => (await cargarHistorial(orca)) ?? historialVacio())
 
   orca.commands.register('revisar', async () => resumen(await revisar(orca)))
   orca.commands.register('cerrar-huerfanos', async () => {
@@ -197,10 +250,15 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   void ciclo(orca)
+  void muestrear(orca)
+    .catch((e: unknown) => orca.log(`muestrear: ${String(e)}`))
+    .finally(() => cicloMuestras(orca))
 }
 
 export function deactivate(): void {
   detenido = true
   if (temporizador) clearTimeout(temporizador)
+  if (temporizadorMuestra) clearTimeout(temporizadorMuestra)
   temporizador = null
+  temporizadorMuestra = null
 }

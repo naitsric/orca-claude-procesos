@@ -44,11 +44,16 @@ logic and panel tests run against a made-up system in `src/fixtures.ts`.
 | `src/procesos.ts` | Pure logic. Parses `ps` and `lsof` output, groups processes by session, finds orphans, assigns verdicts and keeps the record that survives between checks. |
 | `src/sistema.ts` | The only code that touches the machine. Runs `ps` and `lsof`, reads `~/.claude/sessions/`, sends signals. |
 | `src/worker.ts` | Checks on an interval and saves the record to storage. Answers the panel and updates the status bar and notifications. |
-| `src/panel.tsx` | The interface. |
+| `src/panel.tsx` | The sessions panel (Orca components). |
+| `src/graficas.ts` | The Actividad panel: HTML and SVG charts, since Orca's components have none. |
+| `src/confirmar.ts` | What each close confirmation says and closes, shared by both panels. |
+| `src/historial.ts` | Pure logic for the graphs: samples, real CPU between samples and stable session colors. |
+| `src/series.ts` | Pure logic that turns the history into stacked series and axis ticks. |
 | `src/protocol.ts` | The typed contract between the panel and the worker. |
 | `src/tipos.ts` | Data types shared by both sides. |
 | `src/formato.ts` | Formatting for memory, durations and ports. |
 | `src/fixtures.ts` | A made-up system for tests and for `orca plugin check`. |
+| `docs/screenshot.png` | The README screenshot, rendered from made-up data. |
 | `design/` | The icon. `icon.svg` is the source; `render-icon.sh` renders `icon.png` (README) and `icon-256.png` (Orca) with headless Chrome. |
 
 ## Guidelines

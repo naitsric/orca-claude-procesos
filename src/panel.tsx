@@ -30,33 +30,24 @@ import {
   update,
   type PanelContext,
   type TableColumn,
-  type TableRow,
-  type Tone
+  type TableRow
 } from 'orca'
+import {
+  confirmarDeSesion,
+  confirmarForzar,
+  confirmarHuerfanos,
+  confirmarSesion,
+  estadoCorto,
+  huerfanosSeguros,
+  nombreSesion,
+  resumirHecho,
+  tieneAviso,
+  type Hecho,
+  type Pendiente
+} from './confirmar'
 import { abreviarRuta, carpeta, duracion, memoria, plural, puertos } from './formato'
-import type { Foto, Huerfano, Objetivo, Proceso, ResultadoCierre, Rol, Senal, Sesion, Veredicto } from './tipos'
+import type { Foto, Huerfano, Proceso, Sesion, Veredicto } from './tipos'
 
-type Nota = { texto: string; tono?: Tone }
-
-/** Una acción esperando confirmación. Todo lo que muestra se arma al pedirla. */
-type Pendiente = {
-  origen: string
-  titulo: string
-  tono: 'warning' | 'danger'
-  /** Encabezado de la lista: "Se cierran 7 procesos (284 MB):". */
-  encabezado: string
-  items: string[]
-  notas: Nota[]
-  boton: string
-  cancelar: string
-  /** Cómo se titula el resultado si todo sale bien. */
-  hecho: string
-  objetivos: Objetivo[]
-  senal: Senal
-  arbol: boolean
-}
-
-type Hecho = { origen: string; titulo: string; lista: ResultadoCierre[]; error?: string }
 
 const foto = atom<Foto | null>(null)
 const falloPedido = atom<string | null>(null)
@@ -71,21 +62,6 @@ const pestana = atom('pestana', 'sesiones', { persist: 'plugin' })
 const soloRevisar = atom('soloRevisar', false, { persist: 'plugin' })
 
 const ESTADO: Record<Veredicto, string> = { cerrar: 'Cerrar', revisar: 'Revisar', dejar: 'Dejar' }
-
-const ROL: Record<Rol, [string, string]> = {
-  sesion: ['sesión de Claude', 'sesiones de Claude'],
-  mcp: ['servidor MCP', 'servidores MCP'],
-  bash: ['comando de Bash', 'comandos de Bash'],
-  comando: ['proceso de un comando', 'procesos de comandos'],
-  servidor: ['servidor', 'servidores'],
-  tunel: ['túnel', 'túneles'],
-  navegador: ['proceso del navegador', 'procesos del navegador'],
-  despierto: ['caffeinate', 'caffeinate'],
-  agente: ['otra sesión de Claude', 'otras sesiones de Claude'],
-  otro: ['otro proceso', 'otros procesos']
-}
-
-const ORDEN_ROLES: readonly Rol[] = ['agente', 'mcp', 'bash', 'comando', 'servidor', 'tunel', 'navegador', 'despierto', 'otro']
 
 function mensaje(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -124,193 +100,13 @@ export function setup(ctx: PanelContext): void {
   void refrescar()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Armar lo que dice cada confirmación
-
-function objetivo(p: { pid: number; inicio: number }): Objetivo {
-  return { pid: p.pid, inicio: p.inicio }
-}
-
-function nombreSesion(s: Sesion, home: string): string {
-  return s.nombre ?? carpeta(s.cwd, home)
-}
-
-function estadoCorto(s: Sesion, ahora: number): string {
-  const desde = s.estadoDesde ? duracion(ahora - s.estadoDesde) : null
-  if (s.estado === 'busy') return 'trabajando'
-  if (s.estado === 'idle') return desde ? `inactiva ${desde}` : 'inactiva'
-  if (s.estado) return desde ? `${s.estado} ${desde}` : s.estado
-  return `abierta ${duracion(ahora - s.inicio)}`
-}
-
-const suma = (lista: readonly { rssKb: number }[]): number => lista.reduce((n, p) => n + p.rssKb, 0)
-
-const todosLosPuertos = (lista: readonly { puertos: number[] }[]): number[] =>
-  [...new Set(lista.flatMap((p) => p.puertos))].sort((a, b) => a - b)
-
-/** "6 servidores MCP · 160 MB", una línea por tipo de proceso. */
-function porTipo(lista: readonly Proceso[]): string[] {
-  return ORDEN_ROLES.flatMap((rol) => {
-    const grupo = lista.filter((p) => p.rol === rol)
-    if (!grupo.length) return []
-    const enPuerto = todosLosPuertos(grupo)
-    return [
-      `${plural(grupo.length, ROL[rol][0], ROL[rol][1])} · ${memoria(suma(grupo))}` +
-        (enPuerto.length ? ` · ${puertos(enPuerto)}` : '')
-    ]
-  })
-}
-
-/** Una línea por proceso, como mucho 5. */
-function unoPorUno(lista: readonly (Proceso | Huerfano)[], detalle: (p: Proceso | Huerfano) => string): string[] {
-  const lineas = lista.slice(0, 5).map((p) => {
-    const extra = detalle(p)
-    return `${p.nombre}${extra ? ` · ${extra}` : ''} · ${memoria(p.rssKb)}` + (p.puertos.length ? ` · ${puertos(p.puertos)}` : '')
-  })
-  if (lista.length > 5) lineas.push(`y ${lista.length - 5} más`)
-  return lineas
-}
-
-/** Los descendientes de `raices` dentro de `todos`, sin repetir las raíces. */
-function descendientes<T extends { pid: number; ppid: number }>(raices: readonly T[], todos: readonly T[]): T[] {
-  const elegidos = new Set(raices.map((p) => p.pid))
-  const res: T[] = []
-  let frontera = new Set(elegidos)
-  while (frontera.size) {
-    const siguiente = new Set<number>()
-    for (const p of todos) {
-      if (frontera.has(p.ppid) && !elegidos.has(p.pid)) {
-        elegidos.add(p.pid)
-        res.push(p)
-        siguiente.add(p.pid)
-      }
-    }
-    frontera = siguiente
-  }
-  return res
-}
-
-function pedirCerrarSesion(s: Sesion, home: string, ahora: number): void {
-  const nombre = nombreSesion(s, home)
-  const desacoplados = s.procesos.filter((p) => p.desacoplado)
-  const enPuerto = todosLosPuertos(s.procesos)
-  const notas: Nota[] = []
-  if (s.estado === 'busy') notas.push({ texto: 'Está trabajando ahora: la tarea en curso se corta.', tono: 'danger' })
-  else if (s.estado === 'idle' && s.estadoDesde) notas.push({ texto: `Está inactiva desde hace ${duracion(ahora - s.estadoDesde)}.` })
-  if (s.sessionId) notas.push({ texto: `La conversación no se pierde: la retomas con claude --resume ${s.sessionId}` })
-  if (desacoplados.length) {
-    notas.push({ texto: `Incluye ${plural(desacoplados.length, 'proceso que se había desprendido', 'procesos que se habían desprendido')} de la sesión.` })
-  }
-  if (enPuerto.length) notas.push({ texto: `Libera ${puertos(enPuerto)}.` })
+/** Muestra la confirmación (armada en ./confirmar) en el lugar de la acción. */
+function pedir(p: Pendiente | null): void {
+  if (!p) return
   set(hecho, null)
-  set(pendiente, {
-    origen: `s${s.pid}`,
-    titulo: `¿Cerrar la sesión «${nombre}»?`,
-    tono: s.estado === 'busy' ? 'danger' : 'warning',
-    encabezado: `Se cierran ${plural(1 + s.procesos.length, 'proceso', 'procesos')} (${memoria(s.rssTotalKb)}):`,
-    items: [`claude, la sesión · ${memoria(s.rssKb)}`, ...porTipo(s.procesos)],
-    notas,
-    boton: 'Cerrar sesión',
-    cancelar: 'Mantenerla abierta',
-    hecho: `Cerré la sesión «${nombre}»`,
-    objetivos: [objetivo(s), ...desacoplados.filter((p) => p.nivel === 0).map(objetivo)],
-    senal: 'TERM',
-    arbol: true
-  })
+  set(pendiente, p)
 }
 
-function pedirCerrarDeSesion(s: Sesion, elegidos: readonly Proceso[], home: string): void {
-  if (!elegidos.length) return
-  const hijos = descendientes(elegidos, s.procesos)
-  const notas: Nota[] = []
-  if (hijos.length) notas.push({ texto: `Con ellos se ${hijos.length === 1 ? 'cierra' : 'cierran'} ${plural(hijos.length, 'proceso hijo', 'procesos hijos')}.` })
-  if (elegidos.some((p) => p.rol === 'mcp' && !p.desacoplado)) {
-    notas.push({ texto: 'La sesión pierde las herramientas de esos servidores MCP hasta que la reinicies.', tono: 'warning' })
-  }
-  if (elegidos.some((p) => ['bash', 'comando', 'servidor', 'tunel'].includes(p.rol) && p.veredicto === 'dejar')) {
-    notas.push({ texto: 'Claude puede estar esperando a que ese comando termine; lo verá fallar.', tono: 'warning' })
-  }
-  notas.push({ texto: 'La sesión sigue abierta.' })
-  const n = elegidos.length
-  set(hecho, null)
-  set(pendiente, {
-    origen: `s${s.pid}`,
-    titulo: `¿Cerrar ${plural(n, 'proceso', 'procesos')} de «${nombreSesion(s, home)}»?`,
-    tono: 'warning',
-    encabezado: `Se ${n === 1 ? 'cierra' : 'cierran'}:`,
-    items: unoPorUno(elegidos, (p) => ROL[p.rol][0]),
-    notas,
-    boton: `Cerrar ${plural(n, 'proceso', 'procesos')}`,
-    cancelar: 'Cancelar',
-    hecho: `Cerré ${plural(n + hijos.length, 'proceso', 'procesos')}`,
-    objetivos: elegidos.map(objetivo),
-    senal: 'TERM',
-    arbol: true
-  })
-}
-
-function pedirCerrarHuerfanos(origen: string, elegidos: readonly Huerfano[], todos: readonly Huerfano[], home: string): void {
-  if (!elegidos.length) return
-  const hijos = descendientes(elegidos, todos)
-  const probables = elegidos.filter((h) => h.certeza === 'probable')
-  const enPuerto = todosLosPuertos([...elegidos, ...hijos])
-  const notas: Nota[] = []
-  if (hijos.length) notas.push({ texto: `Con ellos se ${hijos.length === 1 ? 'cierra' : 'cierran'} ${plural(hijos.length, 'proceso hijo', 'procesos hijos')}.` })
-  if (probables.length < elegidos.length) notas.push({ texto: 'Su sesión de Claude ya terminó: nadie los está usando.' })
-  if (probables.length) {
-    notas.push({
-      texto: `${probables.map((h) => h.nombre).join(', ')} podría ser de otra app (Cursor, Claude Desktop…).`,
-      tono: 'warning'
-    })
-  }
-  if (enPuerto.length) notas.push({ texto: `Libera ${puertos(enPuerto)}.` })
-  const n = elegidos.length
-  set(hecho, null)
-  set(pendiente, {
-    origen,
-    titulo: `¿Cerrar ${plural(n, 'proceso huérfano', 'procesos huérfanos')}?`,
-    tono: 'warning',
-    encabezado: `Se ${n === 1 ? 'cierra' : 'cierran'}:`,
-    items: unoPorUno(elegidos, (p) => {
-      const h = p as Huerfano
-      if (!h.origen) return h.certeza === 'probable' ? 'origen dudoso' : 'de una sesión que ya no existe'
-      return `de «${h.origen.nombre ?? carpeta(h.origen.cwd, home)}»`
-    }),
-    notas,
-    boton: `Cerrar ${plural(n, 'proceso', 'procesos')}`,
-    cancelar: 'Cancelar',
-    hecho: `Cerré ${plural(n + hijos.length, 'proceso', 'procesos')}`,
-    objetivos: elegidos.map(objetivo),
-    senal: 'TERM',
-    arbol: true
-  })
-}
-
-function pedirForzar(origen: string, vivos: readonly ResultadoCierre[], f: Foto | null): void {
-  if (!f) return
-  const inicios = new Map<number, number>()
-  for (const s of f.sesiones) {
-    inicios.set(s.pid, s.inicio)
-    for (const p of s.procesos) inicios.set(p.pid, p.inicio)
-  }
-  for (const h of f.huerfanos) inicios.set(h.pid, h.inicio)
-  const lista = vivos.filter((r) => inicios.has(r.pid))
-  set(hecho, null)
-  set(pendiente, {
-    origen,
-    titulo: `¿Forzar el cierre de ${plural(lista.length, 'proceso', 'procesos')}?`,
-    tono: 'danger',
-    encabezado: 'No respondieron al cierre normal:',
-    items: lista.map((r) => `${r.nombre} · pid ${r.pid}`),
-    notas: [{ texto: 'Forzar (SIGKILL) los termina en el acto, sin dejarles guardar nada.', tono: 'warning' }],
-    boton: 'Forzar cierre',
-    cancelar: 'Dejarlos así',
-    hecho: `Forcé el cierre de ${plural(lista.length, 'proceso', 'procesos')}`,
-    objetivos: lista.map((r) => ({ pid: r.pid, inicio: inicios.get(r.pid)! })),
-    senal: 'KILL',
-    arbol: false
-  })
-}
 
 // ---------------------------------------------------------------------------------------------
 // La confirmación, el progreso y el resultado, en el lugar de la acción
@@ -353,35 +149,18 @@ function Confirmacion(props: { p: Pendiente }) {
 
 function Resultado(props: { h: Hecho; f: Foto | null }) {
   const { h } = props
-  const cerrados = h.lista.filter((r) => r.resultado === 'cerrado')
-  const vivos = h.lista.filter((r) => r.resultado === 'sigue-vivo')
-  const fallidos = h.lista.filter((r) => r.resultado === 'rechazado' || r.resultado === 'error')
-  const todoBien = !h.error && !vivos.length && !fallidos.length
-  const titulo = h.error
-    ? 'No se pudo cerrar'
-    : todoBien
-      ? h.titulo
-      : `Cerré ${cerrados.length} de ${plural(h.lista.length, 'proceso', 'procesos')}`
+  const r = resumirHecho(h)
   return (
-    <Callout tone={todoBien ? 'success' : 'warning'} title={titulo} icon={todoBien ? 'check' : 'warning'}>
+    <Callout tone={r.todoBien ? 'success' : 'warning'} title={r.titulo} icon={r.todoBien ? 'check' : 'warning'}>
       <Stack gap="xs">
-        {h.error ? <Text size="sm">El worker no respondió: {h.error}</Text> : null}
-        {todoBien && cerrados.length > 1 ? (
-          <Text size="sm" muted>
-            {plural(cerrados.length, 'proceso cerrado', 'procesos cerrados')}.
-          </Text>
-        ) : null}
-        {vivos.length ? (
-          <Text size="sm">Siguen vivos: {vivos.map((r) => `${r.nombre} (${r.pid})`).join(', ')}.</Text>
-        ) : null}
-        {fallidos.map((r) => (
-          <Text size="sm">
-            {r.nombre} ({r.pid}): {r.detalle ?? r.resultado}
+        {r.lineas.map((l) => (
+          <Text size="sm" muted={r.todoBien}>
+            {l}
           </Text>
         ))}
         <Row gap="xs">
-          {vivos.length ? (
-            <Button size="sm" tone="danger" onPress={() => pedirForzar(h.origen, vivos, props.f)}>
+          {r.vivos.length ? (
+            <Button size="sm" tone="danger" onPress={() => pedir(confirmarForzar(h.origen, r.vivos, props.f))}>
               Forzar cierre
             </Button>
           ) : null}
@@ -465,7 +244,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
   const marcados = new Set(read(seleccion)[clave] ?? [])
   const elegidos = s.procesos.filter((p) => marcados.has(String(p.pid)))
   const ahora = read(foto)?.tomadaEn ?? Date.now()
-  const aviso = s.veredicto !== 'dejar' || s.procesos.some((p) => p.veredicto !== 'dejar')
+  const aviso = tieneAviso(s)
   // Con una confirmación pendiente la tarjeta se queda abierta: es donde está la pregunta.
   const abierta = (read(abiertas)[clave] ?? false) || activo(clave)
   return (
@@ -520,7 +299,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
               size="sm"
               variant="outline"
               disabled={!elegidos.length || ocupado}
-              onPress={() => pedirCerrarDeSesion(s, elegidos, home)}
+              onPress={() => pedir(confirmarDeSesion(s, elegidos, home))}
             >
               {elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados'}
             </Button>
@@ -530,7 +309,7 @@ function TarjetaSesion(props: { sesion: Sesion; home: string; filtrar: boolean; 
               variant="outline"
               icon="stop"
               disabled={ocupado}
-              onPress={() => pedirCerrarSesion(s, home, ahora)}
+              onPress={() => pedir(confirmarSesion(s, home, ahora))}
             >
               Cerrar sesión
             </Button>
@@ -545,7 +324,7 @@ function PestanaSesiones(props: { f: Foto; ocupado: boolean }) {
   const { f, ocupado } = props
   const filtrar = read(soloRevisar)
   const sesiones = filtrar
-    ? f.sesiones.filter((s) => s.veredicto !== 'dejar' || s.procesos.some((p) => p.veredicto !== 'dejar'))
+    ? f.sesiones.filter(tieneAviso)
     : f.sesiones
   // Una sesión cerrada desaparece de la lista; su resultado queda arriba de la lista.
   const h = read(hecho)
@@ -579,7 +358,7 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
   }
   const marcados = new Set(read(seleccion).huerfanos ?? [])
   const elegidos = f.huerfanos.filter((h) => marcados.has(String(h.pid)))
-  const seguros = f.huerfanos.filter((h) => h.certeza === 'segura' && h.nivel === 0)
+  const seguros = huerfanosSeguros(f)
   return (
     <Stack gap="sm">
       <Text muted size="sm">
@@ -603,7 +382,7 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
             size="sm"
             tone="danger"
             disabled={!elegidos.length || ocupado}
-            onPress={() => pedirCerrarHuerfanos('huerfanos', elegidos, f.huerfanos, f.home)}
+            onPress={() => pedir(confirmarHuerfanos('huerfanos', elegidos, f.huerfanos, f.home))}
           >
             {elegidos.length ? `Cerrar ${plural(elegidos.length, 'seleccionado', 'seleccionados')}` : 'Cerrar seleccionados'}
           </Button>
@@ -626,7 +405,7 @@ function AvisoHuerfanos(props: { f: Foto; ocupado: boolean }) {
   const { f, ocupado } = props
   if (activo('aviso')) return <Accion origen="aviso" />
   const t = f.totales
-  const seguros = f.huerfanos.filter((h) => h.certeza === 'segura' && h.nivel === 0)
+  const seguros = huerfanosSeguros(f)
   if (!seguros.length) return null
   return (
     <Callout tone="danger" title={plural(t.huerfanosSeguros, 'proceso huérfano', 'procesos huérfanos')} icon="warning">
@@ -640,7 +419,7 @@ function AvisoHuerfanos(props: { f: Foto; ocupado: boolean }) {
             size="sm"
             tone="danger"
             disabled={ocupado}
-            onPress={() => pedirCerrarHuerfanos('aviso', seguros, f.huerfanos, f.home)}
+            onPress={() => pedir(confirmarHuerfanos('aviso', seguros, f.huerfanos, f.home))}
           >
             {t.huerfanosSeguros === 1 ? 'Cerrarlo' : 'Cerrar todos'}
           </Button>

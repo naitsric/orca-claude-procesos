@@ -110,3 +110,25 @@ export type ResultadoCierre = {
   resultado: 'cerrado' | 'sigue-vivo' | 'rechazado' | 'error'
   detalle?: string
 }
+
+// ---------------------------------------------------------------------------------------------
+// Historial para las gráficas
+
+/** Una sesión en una muestra. `clave` es `s<pid>`; `cpu` es % de un núcleo (puede pasar de 100). */
+export type MuestraSesion = { clave: string; nombre: string; cpu: number; rssKb: number }
+
+/** Lo que cuesta Claude en un instante: cada sesión con todo lo que lanzó, y los huérfanos. */
+export type Muestra = {
+  t: number
+  sesiones: MuestraSesion[]
+  huerfanosCpu: number
+  huerfanosRssKb: number
+}
+
+/** Las muestras de la última media hora y el color fijo de cada sesión (índice de paleta; -1 es
+ *  «Otras»). El color sigue a la sesión: no cambia aunque otras aparezcan o se cierren. */
+export type Historial = {
+  muestras: Muestra[]
+  colores: Record<string, number>
+  intervaloMs: number
+}

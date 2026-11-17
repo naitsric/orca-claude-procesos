@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import {
   agrupar,
+  COLUMNAS_PS,
   armarFoto,
   cerrables,
   cwdsDeLsof,
@@ -12,6 +13,7 @@ import {
   parsearPs,
   pidsRelevantes,
   puertosDeLsof,
+  type Fila,
   type InfoClaude,
   type Memoria
 } from './procesos'
@@ -54,13 +56,20 @@ async function infosDeClaude(pids: readonly number[]): Promise<Map<number, InfoC
   return infos
 }
 
-export async function tomarFoto(memoria: Memoria, opciones: Opciones): Promise<{ foto: Foto; memoria: Memoria }> {
-  const ahora = Date.now()
+/** Todos los procesos de la máquina, con `ps`. Lo usan la revisión completa y las muestras. */
+export async function leerFilas(ahora: number): Promise<Fila[]> {
   const [ps, comm] = await Promise.all([
-    correr('/bin/ps', ['-axww', '-o', 'pid=,ppid=,pgid=,uid=,tty=,etime=,rss=,%cpu=,command=']),
+    correr('/bin/ps', ['-axww', '-o', COLUMNAS_PS]),
     correr('/bin/ps', ['-ax', '-o', 'pid=,comm='])
   ])
-  const agrupacion = agrupar(parsearPs(ps, comm, ahora), memoria, process.getuid())
+  return parsearPs(ps, comm, ahora)
+}
+
+export const uid = (): number => process.getuid()
+
+export async function tomarFoto(memoria: Memoria, opciones: Opciones): Promise<{ foto: Foto; memoria: Memoria }> {
+  const ahora = Date.now()
+  const agrupacion = agrupar(await leerFilas(ahora), memoria, process.getuid())
   const relevantes = pidsRelevantes(agrupacion)
   const [escuchando, carpetas, infos] = await Promise.all([
     relevantes.puertos.length

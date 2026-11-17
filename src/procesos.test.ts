@@ -26,8 +26,8 @@ test('saca el comando que la herramienta Bash le pasó al shell', () => {
 test('nombra node y python por lo que corren', () => {
   const [py, node] = parsearPs(
     [
-      ' 10 1 10 501 ?? 01:00 1 0.0 /x/bin/python -m aws_mcp --flag',
-      ' 11 1 11 501 ?? 01:00 1 0.0 node /x/pkg/dist/index.js'
+      ' 10 1 10 501 ?? 01:00 1 0.0 0:00.00 /x/bin/python -m aws_mcp --flag',
+      ' 11 1 11 501 ?? 01:00 1 0.0 0:00.00 node /x/pkg/dist/index.js'
     ].join('\n'),
     ' 10 /x/bin/python\n 11 node',
     AHORA
@@ -39,10 +39,10 @@ test('nombra node y python por lo que corren', () => {
 test('salta los subcomandos de uv y usa el título del proceso', () => {
   const [uv, npm, pyc, mayus] = parsearPs(
     [
-      ' 10 1 10 501 ?? 01:00 1 0.0 /x/bin/uv tool uvx mcp-proxy-for-aws@latest https://x',
-      ' 11 1 11 501 ?? 01:00 1 0.0 npm exec @playwright/mcp@latest',
-      ' 12 1 12 501 ?? 01:00 1 0.0 /x/bin/python -c import sys; print(1)',
-      ' 13 1 13 501 ?? 01:00 1 0.0 /Library/Frameworks/Python.framework/Python script.py'
+      ' 10 1 10 501 ?? 01:00 1 0.0 0:00.00 /x/bin/uv tool uvx mcp-proxy-for-aws@latest https://x',
+      ' 11 1 11 501 ?? 01:00 1 0.0 0:00.00 npm exec @playwright/mcp@latest',
+      ' 12 1 12 501 ?? 01:00 1 0.0 0:00.00 /x/bin/python -c import sys; print(1)',
+      ' 13 1 13 501 ?? 01:00 1 0.0 0:00.00 /Library/Frameworks/Python.framework/Python script.py'
     ].join('\n'),
     ' 10 /x/bin/uv\n 11 npm exec @playwright/mcp@latest\n 12 /x/bin/python\n 13 /Library/Frameworks/Python.framework/Python',
     AHORA

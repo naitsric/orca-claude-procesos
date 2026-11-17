@@ -18,7 +18,10 @@ export type Fila = {
   tty: string
   inicio: number
   rssKb: number
+  /** %CPU según ps: un promedio que macOS suaviza en el último minuto. */
   cpu: number
+  /** CPU acumulada en segundos (`ps -o time`): con dos lecturas da el uso real entre ellas. */
+  cpuSeg: number
   /** Ruta o nombre del ejecutable (`ps -o comm`). */
   comm: string
   comando: string
@@ -119,8 +122,19 @@ export function segundosDeEtime(etime: string): number {
   return Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4])
 }
 
-// ps -axww -o pid=,ppid=,pgid=,uid=,tty=,etime=,rss=,%cpu=,command=
-const LINEA_PS = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+([\d.,]+)\s+(.*)$/
+/** time de ps: `[dd-][hh:]mm:ss.cc`, en segundos. */
+export function segundosDeTiempo(tiempo: string): number {
+  const m = /^(?:(\d+)-)?([\d:.,]+)$/.exec(tiempo.trim())
+  if (!m) return 0
+  const partes = m[2].replace(',', '.').split(':').map(Number)
+  let seg = 0
+  for (const p of partes) seg = seg * 60 + (Number.isFinite(p) ? p : 0)
+  return Number(m[1] ?? 0) * 86400 + seg
+}
+
+// ps -axww -o pid=,ppid=,pgid=,uid=,tty=,etime=,rss=,%cpu=,time=,command=
+export const COLUMNAS_PS = 'pid=,ppid=,pgid=,uid=,tty=,etime=,rss=,%cpu=,time=,command='
+const LINEA_PS = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+([\d.,]+)\s+(\S+)\s+(.*)$/
 // ps -ax -o pid=,comm=
 const LINEA_COMM = /^\s*(\d+)\s+(.*)$/
 
@@ -135,7 +149,7 @@ export function parsearPs(salidaPs: string, salidaComm: string, ahora: number): 
     const m = LINEA_PS.exec(linea)
     if (!m) continue
     const pid = Number(m[1])
-    const comando = m[9].trim()
+    const comando = m[10].trim()
     filas.push({
       pid,
       ppid: Number(m[2]),
@@ -145,6 +159,7 @@ export function parsearPs(salidaPs: string, salidaComm: string, ahora: number): 
       inicio: ahora - segundosDeEtime(m[6]) * 1000,
       rssKb: Number(m[7]),
       cpu: Number(m[8].replace(',', '.')),
+      cpuSeg: segundosDeTiempo(m[9]),
       comm: comms.get(pid) ?? comando.split(/\s+/)[0] ?? '',
       comando
     })

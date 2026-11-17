@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "claude-procesos",
   "name": "Procesos de Claude",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Monitor de las sesiones de Claude Code, los procesos que lanzan y los que quedaron huérfanos, con el veredicto de cuáles cerrar.",
   "icon": "design/icon-256.png",
   "author": {
@@ -26,6 +26,13 @@
         "icon": "activity",
         "entry": "src/panel.tsx",
         "ui": "components"
+      },
+      {
+        "id": "actividad",
+        "title": "Actividad de Claude",
+        "icon": "bar-chart-3",
+        "entry": "src/graficas.ts",
+        "ui": "html"
       }
     ],
     "commands": [
