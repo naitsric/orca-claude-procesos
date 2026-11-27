@@ -2,9 +2,12 @@
 // - una sesión viva en Orca (4129) con dos MCP, caffeinate y un `npm run dev` de hace 1 h 30;
 // - una sesión que murió (5000) y dejó vivo su mcp-grafana (5001) con un hijo;
 // - un shell de Bash suelto (8800) con un túnel SSM en :15432;
-// - un servidor MCP sin dueño conocido (8900) y un `npm start` de launchd que no es de Claude.
+// - un servidor MCP sin dueño conocido (8900) y un `npm start` de launchd que no es de Claude;
+// - seis worktrees del repositorio mi-app: dos inactivos sin nada que perder, uno inactivo con
+//   cambios, uno de un subagente de la sesión viva, uno con actividad de hoy y un workspace de Orca.
 import { agrupar, armarFoto, leerInfoClaude, memoriaVacia, parsearPs, type InfoClaude, type Memoria } from './procesos'
 import type { Foto } from './tipos'
+import { agregarWorktrees, type LecturaWorktree } from './worktrees'
 
 export const AHORA = Date.UTC(2026, 10, 13, 18, 0, 0)
 export const UID = 501
@@ -106,6 +109,73 @@ export function revisarFixture(
   return armarFoto(a, PUERTOS, CWDS, memoria, { ahora, horasSesionLarga: 12, home: HOME }, extra.infos)
 }
 
+const UN_DIA = 24 * 3600_000
+export const REPO = '/Users/u/www/mi-app'
+export const DIAS_INACTIVO = 7
+
+/** Lo que src/git.ts leería de los worktrees de mi-app. */
+export function lecturasDePrueba(ahora = AHORA): LecturaWorktree[] {
+  const base = { repo: REPO, bloqueo: null, falta: false, cambios: 0, sinSeguir: 0, sinSubir: null, commitsSueltos: 0 }
+  return [
+    {
+      ...base,
+      ruta: `${REPO}/.claude/worktrees/feat+pagos`,
+      head: 'a1a1a1a',
+      rama: 'worktree-feat+pagos',
+      sinSubir: 2,
+      ultimaActividad: ahora - 12 * UN_DIA,
+      kb: 348_160
+    },
+    {
+      // Lo bloqueó un subagente de la sesión 5000, que ya murió.
+      ...base,
+      ruta: `${REPO}/.claude/worktrees/agent-a1b2c3`,
+      head: 'b2b2b2b',
+      rama: 'feat/exportar',
+      bloqueo: 'claude agent agent-a1b2c3 (pid 5000 start Fri Oct 16 09:00:00 2026)',
+      ultimaActividad: ahora - 28 * UN_DIA,
+      kb: 512_000
+    },
+    {
+      ...base,
+      ruta: `${REPO}/.claude/worktrees/fix+login`,
+      head: 'c3c3c3c',
+      rama: 'fix/login',
+      cambios: 2,
+      sinSeguir: 1,
+      ultimaActividad: ahora - 9 * UN_DIA,
+      kb: 201_000
+    },
+    {
+      // De un subagente de la sesión viva (4129).
+      ...base,
+      ruta: `${REPO}/.claude/worktrees/agent-d4e5f6`,
+      head: 'd4d4d4d',
+      rama: 'feat/busqueda',
+      bloqueo: 'claude agent agent-d4e5f6 (pid 4129 start Fri Nov 13 16:00:00 2026)',
+      ultimaActividad: ahora - 10 * 60_000,
+      kb: 90_000
+    },
+    {
+      ...base,
+      ruta: '/Users/u/www/mi-app-hotfix',
+      head: 'e5e5e5e',
+      rama: 'hotfix/factura',
+      ultimaActividad: ahora - 3 * 3600_000,
+      kb: 77_000
+    },
+    {
+      ...base,
+      ruta: '/Users/u/orca/workspaces/mi-app/tarea',
+      head: 'f6f6f6f',
+      rama: 'u/tarea',
+      ultimaActividad: ahora - 20 * UN_DIA,
+      kb: 120_000
+    }
+  ]
+}
+
 export function fotoDePrueba(): Foto {
-  return revisarFixture(memoriaConSesionMuerta(), { infos: infosDePrueba() }).foto
+  const foto = revisarFixture(memoriaConSesionMuerta(), { infos: infosDePrueba() }).foto
+  return agregarWorktrees(foto, lecturasDePrueba(), AHORA, DIAS_INACTIVO)
 }

@@ -107,7 +107,7 @@ async function conWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: ReturnType<typeof mockHost>) => Promise<void>
 ): Promise<void> {
   const host = mockHost(opciones)
-  const worker = await mountWorker(main, { host, commands: ['revisar', 'cerrar-huerfanos'] })
+  const worker = await mountWorker(main, { host, commands: ['revisar', 'cerrar-huerfanos', 'cerrar-worktrees'] })
   try {
     await fn(worker, host)
   } finally {

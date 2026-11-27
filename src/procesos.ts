@@ -832,10 +832,24 @@ export function armarFoto(
     huerfanos: huerfanos.length,
     huerfanosSeguros: huerfanos.filter((h) => h.certeza === 'segura').length,
     huerfanosRssKb: huerfanos.reduce((n, h) => n + h.rssKb, 0),
-    puertosHuerfanos: [...new Set(huerfanos.flatMap((h) => h.puertos))].sort((x, y) => x - y)
+    puertosHuerfanos: [...new Set(huerfanos.flatMap((h) => h.puertos))].sort((x, y) => x - y),
+    worktrees: 0,
+    worktreesCerrar: 0,
+    worktreesCerrarKb: 0
   }
 
-  return { foto: { tomadaEn: ahora, idioma: idioma(), home: config.home, sesiones, huerfanos, totales }, memoria }
+  // Los worktrees los agrega después src/worktrees.ts: se buscan aparte, cada varios minutos.
+  const foto: Foto = {
+    tomadaEn: ahora,
+    idioma: idioma(),
+    home: config.home,
+    sesiones,
+    huerfanos,
+    worktrees: [],
+    worktreesRevisados: null,
+    totales
+  }
+  return { foto, memoria }
 }
 
 /** Todo lo que la foto deja cerrar, por pid, con su `inicio` para validar la identidad. */
