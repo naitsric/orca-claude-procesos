@@ -130,8 +130,10 @@ process that isn't Claude's or a worktree with work that would be lost.
   if something doesn't respond, and only when you ask for it.
 - **Checked again before every signal**: the worker takes a fresh snapshot
   and only signals processes that are still there with the same start time, so
-  a reused PID is never hit. Processes of other users and anything not tied to
-  Claude are never offered.
+  a reused PID is never hit. An orphan must also still be an orphan: one that a
+  live session owns by then, or that is no longer certain, is left alone, and
+  the result names it and says why. Processes of other users and anything not
+  tied to Claude are never offered.
 - **Worktrees go through `git worktree remove`**, which deletes the folder and
   keeps the branch and its commits. The confirmation says what is deleted
   (ignored files such as `node_modules` and `.env` go with the folder) and
@@ -139,19 +141,25 @@ process that isn't Claude's or a worktree with work that would be lost.
 - **Checked again before every removal**: the worker reads the worktree again
   and leaves it alone if it has new commits, a session started working in it,
   or it has changes the confirmation didn't warn about.
-- **The palette command asks too**: *close inactive worktrees* removes nothing
-  by itself. It names the worktrees it found and leaves the question in the
-  panel's *Worktrees* tab, with the same list and the same confirmation as the
-  button. Nothing is removed unless you confirm there; cancel, or don't answer
-  within ten minutes, and the request is dropped.
+- **The palette commands ask too**: *close certain orphans* and *close inactive
+  worktrees* close nothing by themselves. Each names what it found and leaves
+  the question in the Claude Processes panel, in the *Orphans* or the
+  *Worktrees* tab, with the same confirmation as the button. If the panel is
+  closed, the question is there when you open it. Nothing is closed unless you
+  confirm there; cancel, or don't answer within ten minutes, and the request is
+  dropped. The panel asks one question at a time, so the other command replaces
+  a request you haven't answered.
+- **Only the orphans the command listed**: the question covers those and no
+  orphan that showed up later. One that is gone or has changed by the time you
+  open the panel is left out, and the confirmation names it.
 
 ### Always in sight
 - A **status bar item**, `Claude 5 · 2 orphans · 3 worktrees`, that turns
   amber when there are orphans and red when they hold ports. The worktree count
   is the ones proposed for closing. Click it to check now.
-- Three **command palette** entries: check now, close every certain orphan, and
-  close inactive worktrees, which lists the ones with nothing to lose and asks
-  you to confirm in the panel.
+- Three **command palette** entries: check now, close certain orphans, and
+  close inactive worktrees. The last two list what they found and ask you to
+  confirm in the panel before anything is closed.
 - A **desktop notification** the first time a worktree goes inactive.
 
 ### In your language
@@ -275,7 +283,8 @@ come from `du`, measured one at a time in the background.
 
 **Safety.** Every close goes through the worker. It takes a new snapshot and
 signals a process only if it is still there, belongs to your user and has the
-same start time as the one you chose. A worktree is removed only if a fresh
+same start time as the one you chose; one you chose as an orphan must still be
+an orphan in that snapshot. A worktree is removed only if a fresh
 reading still shows it at the same commit, with no session in it and no changes
 you weren't warned about; without that warning the worker never passes
 `--force`, so Git itself refuses to delete uncommitted work.

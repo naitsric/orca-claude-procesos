@@ -11,7 +11,7 @@
 // búsqueda, evaluados contra las sesiones vivas de ese momento.
 import type { JsonValue } from 'orca'
 import type { OrcaWorkerApi } from 'orca/worker'
-import { nombreWorktree, worktreesParaCerrar } from './confirmar'
+import { huerfanosSeguros, nombreWorktree, worktreesParaCerrar } from './confirmar'
 import { carpeta, memoria as fmtMem, puertos as fmtPuertos } from './formato'
 import { cerrarWorktrees, detenerLecturas, leerWorktrees, medirWorktrees } from './git'
 import {
@@ -29,7 +29,16 @@ import { idioma, resolverIdioma, t, usarIdioma, type Idioma } from './i18n'
 import { ajustarMemoria, LIMITE_MEMORIA_BYTES } from './memoria'
 import { leerMemoria, memoriaVacia, mismoProceso, type Memoria } from './procesos'
 import { cerrar, leerFilas, tomarFoto, uid, type Opciones } from './sistema'
-import type { Foto, Historial, Objetivo, ObjetivoWorktree, ResultadoCierre, ResultadoWorktree, Senal } from './tipos'
+import type {
+  Foto,
+  Historial,
+  Objetivo,
+  ObjetivoWorktree,
+  PedidoDeComando,
+  ResultadoCierre,
+  ResultadoWorktree,
+  Senal
+} from './tipos'
 import { agregarWorktrees, evaluarWorktrees, type LecturaWorktree } from './worktrees'
 
 const CLAVE_MEMORIA = 'memoria'
@@ -51,10 +60,11 @@ const AVANCE_CADA_MS = 3000
 const WORKTREES_FRESCOS_MS = 20_000
 /** El historial se guarda cada minuto, no en cada muestra. */
 const GUARDAR_CADA = Math.round(60_000 / INTERVALO_MUESTRA_MS)
-/** Lo que espera a un panel el pedido de confirmar que deja el comando «cerrar worktrees
- *  inactivos»: quien abra el panel mucho después no se encuentra con la pregunta. */
+/** Lo que espera a un panel el pedido de confirmar que deja un comando de la paleta («cerrar
+ *  huérfanos seguros» o «cerrar worktrees inactivos»): quien abra el panel mucho después no se
+ *  encuentra con la pregunta. */
 const CONFIRMACION_VIGENTE_MS = 10 * 60_000
-/** Cuántos worktrees nombra ese comando en su respuesta; el panel los muestra todos. */
+/** Cuántos nombra uno de esos comandos en su respuesta; el panel los muestra todos. */
 const NOMBRES_EN_COMANDO = 5
 
 type Ajustes = Opciones & {
@@ -105,9 +115,9 @@ let vida = 0
 /** Las sesiones de la última foto: sus carpetas dicen en qué repositorios buscar. */
 let sesionesVistas: { cwd: string | null }[] = []
 let worktreesAvisados: Set<string> | null = null
-/** Cuándo dejó el comando «cerrar worktrees inactivos» su pedido de confirmar; null si no hay
- *  ninguno o un panel ya lo tomó. */
-let confirmacionPedida: number | null = null
+/** El pedido de confirmar que dejó un comando de la paleta, y cuándo; null si no hay ninguno o
+ *  un panel ya lo tomó. Es uno solo, como la pregunta del panel: otro comando lo reemplaza. */
+let pedidoDeComando: { en: number; pedido: PedidoDeComando } | null = null
 
 function numero(valor: unknown, porDefecto: number, min: number, max: number): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? Math.min(max, Math.max(min, valor)) : porDefecto
@@ -440,6 +450,23 @@ async function cerrarWorktreesPedidos(
   return { resultados: [...hechos], foto: await revisar(orca, Infinity), faltan: Math.max(0, total - hechos.length) }
 }
 
+/**
+ * Un comando no tiene cómo preguntar: Orca solo muestra el texto que devuelve. Así que los
+ * comandos que cierran algo no cierran nada: dicen qué encontraron y dejan aquí el pedido para el
+ * panel «Claude Processes», que pregunta con la lista a la vista (enseguida si está abierto, o
+ * cuando se abra) y solo cierra si ahí se confirma. Sin respuesta, el pedido vence y no pasa nada.
+ */
+function dejarPedido(orca: OrcaWorkerApi, pedido: PedidoDeComando): void {
+  pedidoDeComando = { en: Date.now(), pedido }
+  orca.panels.post('procesos.confirmar', {})
+}
+
+/** "a, b, c y 4 más": los primeros que nombra un comando en su respuesta. */
+function nombrar(nombres: readonly string[]): string {
+  const mas = nombres.length - NOMBRES_EN_COMANDO
+  return nombres.slice(0, NOMBRES_EN_COMANDO).join(', ') + (mas > 0 ? ` ${t().confirmar.yMas(mas)}` : '')
+}
+
 function resumen(foto: Foto): string {
   const w = t().worker
   if (foto.error) return w.noPudeLeer(foto.error)
@@ -542,7 +569,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   midiendo = false
   cerrandoWorktrees = false
   worktreesAvisados = null
-  confirmacionPedida = null
+  pedidoDeComando = null
   orca.panels.handle('procesos.foto', async (pedido) => {
     await anotarLocale(orca, pedido?.locale)
     return revisar(orca, WORKTREES_FRESCOS_MS)
@@ -552,30 +579,29 @@ export default function activate(orca: OrcaWorkerApi): void {
   // El pedido es de un solo panel y de una sola vez: la pregunta no se repite en otro panel ni
   // al volver a abrirlo.
   orca.panels.handle('procesos.tomarConfirmacion', () => {
-    const pedida = confirmacionPedida !== null && Date.now() - confirmacionPedida <= CONFIRMACION_VIGENTE_MS
-    confirmacionPedida = null
-    return { pedida }
+    const vigente = pedidoDeComando !== null && Date.now() - pedidoDeComando.en <= CONFIRMACION_VIGENTE_MS
+    const pedido = vigente ? pedidoDeComando!.pedido : null
+    pedidoDeComando = null
+    return { pedido }
   })
   // Ajustado como al guardarlo: lo que viaja entre el worker y un panel tiene el mismo tope.
   orca.panels.handle('procesos.historial', async () => ajustarHistorial(await cargarHistorial(orca)))
 
   orca.commands.register('revisar', async () => resumen(await revisar(orca)))
+  // No cierra nada (ver `dejarPedido`): dice cuáles son los huérfanos seguros y deja el pedido,
+  // con esos mismos, para el panel. Lo que el panel confirme va por `procesos.cerrar`, que mira
+  // otra vez cada proceso justo antes de mandarle la señal.
   orca.commands.register('cerrar-huerfanos', async () => {
     const foto = await revisar(orca)
-    const objetivos = foto.huerfanos
-      .filter((h) => h.certeza === 'segura' && h.nivel === 0)
-      .map((h) => ({ pid: h.pid, inicio: h.inicio }))
-    if (!objetivos.length) return t().worker.nadaQueCerrar
-    const { resultados } = await cerrarProcesos(orca, objetivos, 'TERM', true)
-    const cerrados = resultados.filter((r) => r.resultado === 'cerrado').length
-    const vivos = resultados.filter((r) => r.resultado === 'sigue-vivo').map((r) => r.nombre)
-    return t().worker.cerre(cerrados) + (vivos.length ? t().worker.siguenVivos(vivos.join(', ')) : '')
+    if (foto.error) return t().worker.noPudeLeer(foto.error)
+    const seguros = huerfanosSeguros(foto)
+    if (!seguros.length) return t().worker.nadaQueCerrar
+    dejarPedido(orca, { de: 'huerfanos', huerfanos: seguros.map((h) => ({ pid: h.pid, inicio: h.inicio, nombre: h.nombre })) })
+    return t().worker.confirmaHuerfanosEnPanel(seguros.length, nombrar(seguros.map((h) => h.nombre)))
   })
 
-  // Un comando no tiene cómo preguntar: Orca solo muestra el texto que devuelve. Y esto borra
-  // carpetas, así que el comando no cierra nada: dice cuáles son y deja el pedido para el panel,
-  // que pregunta con la lista a la vista y solo cierra (por `procesos.cerrarWorktrees`) si ahí
-  // se confirma. Sin respuesta, el pedido vence y no pasa nada.
+  // Tampoco cierra nada, y esto borra carpetas: el panel pregunta en la pestaña Worktrees y solo
+  // cierra (por `procesos.cerrarWorktrees`) si ahí se confirma.
   orca.commands.register('cerrar-worktrees', async () => {
     if (cerrandoWorktrees) return t().worktree.yaCerrando
     // Con una búsqueda recién hecha: los que nombra son los que hay ahora.
@@ -584,11 +610,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (foto.error) return t().worker.noPudeLeer(foto.error)
     const inactivos = worktreesParaCerrar(foto)
     if (!inactivos.length) return t().worker.nadaWorktrees
-    confirmacionPedida = Date.now()
-    orca.panels.post('procesos.confirmarWorktrees', {})
-    const mas = inactivos.length - NOMBRES_EN_COMANDO
-    const nombres = inactivos.slice(0, NOMBRES_EN_COMANDO).map(nombreWorktree).join(', ') + (mas > 0 ? ` ${t().confirmar.yMas(mas)}` : '')
-    return t().worker.confirmaEnPanel(inactivos.length, nombres)
+    dejarPedido(orca, { de: 'worktrees' })
+    return t().worker.confirmaEnPanel(inactivos.length, nombrar(inactivos.map(nombreWorktree)))
   })
 
   // Revisa enseguida: si cambió el idioma, los paneles y la barra lo toman de la nueva foto.

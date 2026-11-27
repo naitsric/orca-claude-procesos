@@ -1,10 +1,10 @@
 // Los idiomas: cuál se elige, que el español sale completo (motivos, confirmaciones, panel, barra) y
 // que el panel pinta en el idioma de la foto. El resto de las pruebas corre en inglés, el de base.
 import { assert, mockHost, mount, mountWorker, test } from 'orca/testing'
-import { confirmarSesion } from './confirmar'
+import { confirmarListados, confirmarSesion } from './confirmar'
 import { fotoDePrueba, HOME, AHORA, infosDePrueba, memoriaConSesionMuerta, revisarFixture } from './fixtures'
 import { memoria, porcentaje } from './formato'
-import { idiomaDeLocale, resolverIdioma, usarIdioma, type Idioma } from './i18n'
+import { idiomaDeLocale, resolverIdioma, t, usarIdioma, type Idioma } from './i18n'
 import * as panel from './panel'
 import * as main from './worker'
 import type { Foto } from './tipos'
@@ -63,6 +63,31 @@ test('las confirmaciones en español', async () => {
   assert.equal(p.encabezado.startsWith('Se cierran 7 procesos'), true)
   assert.ok(p.items.includes('3 servidores MCP · 49 MB'), p.items.join(' | '))
   assert.equal(p.cancelar, 'Mantenerla abierta')
+})
+
+test('el comando de cerrar huérfanos y su confirmación, en español', async () => {
+  await en('es', () => {
+    assert.equal(
+      t().worker.confirmaHuerfanosEnPanel(2, 'mcp-grafana, zsh'),
+      '2 huérfanos seguros: mcp-grafana, zsh. No cerré nada: confirma en la pestaña Huérfanos del panel «Procesos de Claude».'
+    )
+    const f = fotoDePrueba()
+    const grafana = f.huerfanos.find((h) => h.pid === 5001)!
+    const { pendiente, cambiaron } = confirmarListados(
+      'huerfanos',
+      [
+        { pid: grafana.pid, inicio: grafana.inicio, nombre: grafana.nombre },
+        { pid: 7777, inicio: grafana.inicio, nombre: 'mcp-viejo' }
+      ],
+      f
+    )
+    assert.equal(pendiente!.titulo, '¿Cerrar 1 proceso huérfano?')
+    assert.equal(
+      pendiente!.notas[0].texto,
+      'Queda fuera: mcp-viejo (7777). El comando lo listó, pero ya no está o ya no es el mismo huérfano seguro.'
+    )
+    assert.equal(cambiaron[0].detalle, 'Ya no aparece como proceso de Claude.')
+  })
 })
 
 function hostCon(foto: Foto, locales: (string | undefined)[] = []) {

@@ -3,9 +3,11 @@
 // cierran lo mismo, y se prueba en Node.
 import { carpeta, duracion, memoria, plural, puertos } from './formato'
 import { t } from './i18n'
+import { cerrables, rechazoDe } from './procesos'
 import type {
   Foto,
   Huerfano,
+  HuerfanoListado,
   Objetivo,
   ObjetivoWorktree,
   Proceso,
@@ -222,10 +224,39 @@ export function confirmarHuerfanos(
     boton: c.cerrarN(n),
     cancelar: c.cancelar,
     hecho: c.cerreN(n + hijos.length),
-    objetivos: elegidos.map(objetivo),
+    // Como huérfanos, con su certeza: el worker deja al que ya no lo sea cuando vaya a cerrarlo.
+    objetivos: elegidos.map((h) => ({ ...objetivo(h), huerfano: h.certeza })),
     senal: 'TERM',
     arbol: true
   }
+}
+
+/**
+ * La confirmación de lo que listó el comando «cerrar huérfanos seguros», contra la foto de ahora:
+ * la misma del botón, pero solo con los que el comando nombró y siguen siendo el mismo huérfano
+ * seguro (mismo pid, mismo inicio). Los que cambiaron desde entonces quedan fuera y salen en
+ * `cambiaron`, cada uno con su motivo; los huérfanos que aparecieron después tampoco entran.
+ * `pendiente` es null si no queda ninguno por cerrar.
+ */
+export function confirmarListados(
+  origen: string,
+  listados: readonly HuerfanoListado[],
+  f: Foto
+): { pendiente: Pendiente | null; cambiaron: ResultadoCierre[] } {
+  const permitidos = cerrables(f)
+  const siguen = new Set<number>()
+  const cambiaron: ResultadoCierre[] = []
+  for (const l of listados) {
+    const rechazo = rechazoDe({ pid: l.pid, inicio: l.inicio, huerfano: 'segura' }, permitidos)
+    if (rechazo) cambiaron.push({ pid: l.pid, nombre: l.nombre, resultado: 'rechazado', detalle: rechazo })
+    else siguen.add(l.pid)
+  }
+  const pendiente = confirmarHuerfanos(origen, f.huerfanos.filter((h) => siguen.has(h.pid)), f.huerfanos, f.home)
+  if (pendiente && cambiaron.length) {
+    const nombres = cambiaron.map((r) => `${r.nombre} (${r.pid})`).join(', ')
+    pendiente.notas.unshift({ texto: t().confirmar.quedanFuera(cambiaron.length, nombres), tono: 'warning' })
+  }
+  return { pendiente, cambiaron }
 }
 
 export function confirmarForzar(origen: string, vivos: readonly ResultadoCierre[], f: Foto | null): Pendiente | null {
@@ -235,6 +266,8 @@ export function confirmarForzar(origen: string, vivos: readonly ResultadoCierre[
     inicios.set(s.pid, s.inicio)
     for (const p of s.procesos) inicios.set(p.pid, p.inicio)
   }
+  // Los huérfanos se piden como tales, igual que la primera vez: el worker deja al que ya no lo sea.
+  const certezas = new Map(f.huerfanos.map((h) => [h.pid, h.certeza]))
   for (const h of f.huerfanos) inicios.set(h.pid, h.inicio)
   const lista = vivos.filter((r) => inicios.has(r.pid))
   if (!lista.length) return null
@@ -249,7 +282,10 @@ export function confirmarForzar(origen: string, vivos: readonly ResultadoCierre[
     boton: c.forzar,
     cancelar: c.dejarlos,
     hecho: c.forzado(lista.length),
-    objetivos: lista.map((r) => ({ pid: r.pid, inicio: inicios.get(r.pid)! })),
+    objetivos: lista.map((r) => {
+      const huerfano = certezas.get(r.pid)
+      return { pid: r.pid, inicio: inicios.get(r.pid)!, ...(huerfano ? { huerfano } : {}) }
+    }),
     senal: 'KILL',
     arbol: false
   }
@@ -341,7 +377,9 @@ export function resumirHecho(h: Hecho): { titulo: string; todoBien: boolean; lin
   const fallidos = h.lista.filter((r) => r.resultado === 'rechazado' || r.resultado === 'error')
   const todoBien = !h.error && !vivos.length && !fallidos.length
   const c = t().confirmar
-  const titulo = h.error ? c.noSePudo : todoBien ? h.titulo : c.cerreDe(cerrados.length, h.lista.length)
+  // Si no se dejó cerrar ninguno (todos cambiaron desde que se vieron), no se intentó nada.
+  const nada = h.lista.length > 0 && h.lista.every((r) => r.resultado === 'rechazado')
+  const titulo = h.error ? c.noSePudo : todoBien ? h.titulo : nada ? c.nadaCerrado : c.cerreDe(cerrados.length, h.lista.length)
   const lineas: string[] = []
   if (h.error) lineas.push(c.workerNoRespondio(h.error))
   if (todoBien && cerrados.length > 1) lineas.push(c.cerrados(cerrados.length))
