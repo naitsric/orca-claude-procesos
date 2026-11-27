@@ -20,6 +20,9 @@ declare module 'orca' {
       input: { objetivos: ObjetivoWorktree[] }
       output: { resultados: ResultadoWorktree[]; foto: Foto; faltan: number }
     }
+    /** Si el comando «cerrar worktrees inactivos» dejó un pedido de confirmar hace poco. Quien
+     *  pregunta se lo lleva: la siguiente respuesta es `false`. */
+    'procesos.tomarConfirmacion': { output: { pedida: boolean } }
     /** La última media hora de muestras, para las gráficas. Con muchas sesiones viene resumida
      *  (`Muestra.ms`) para no pasar de `LIMITE_HISTORIAL_BYTES`. */
     'procesos.historial': { output: Historial }
@@ -29,6 +32,9 @@ declare module 'orca' {
     'procesos.foto': Foto
     /** Terminó un cierre de worktrees que había respondido con `faltan`: el resultado completo. */
     'procesos.worktreesCerrados': { resultados: ResultadoWorktree[] }
+    /** El comando «cerrar worktrees inactivos» pide que un panel pregunte: quien lo oye toma el
+     *  pedido con `procesos.tomarConfirmacion`. */
+    'procesos.confirmarWorktrees': Record<string, never>
     /** Cada muestra para las gráficas, con los colores de sesión al día. */
     'procesos.muestra': { muestra: Muestra; colores: Record<string, number> }
   }

@@ -40,7 +40,10 @@ its numbers. The logic and panel tests run against a made-up system in
 `src/fixtures.ts`, and `src/linux.test.ts` against a made-up Linux desktop.
 `src/git.test.ts` builds a real repository with worktrees in a temporary folder
 and closes them with your `git`; it points `CLAUDE_CONFIG_DIR` at that folder so
-it never looks at your own repositories.
+it never looks at your own repositories. `src/worker.test.ts` builds one too, to
+run the *close inactive worktrees* command and check that it closes nothing: the
+command may name inactive worktrees of the repositories your open Claude
+sessions work in, and the test checks those are still there as well.
 Tests run in English, the default language; `src/i18n.test.ts` covers Spanish
 and how the language is chosen.
 
@@ -56,6 +59,7 @@ and how the language is chosen.
 | `src/panel.tsx` | The sessions, orphans and worktrees panel (Orca components). |
 | `src/graficas.ts` | The Claude Activity panel: HTML and SVG charts, since Orca's components have none. |
 | `src/confirmar.ts` | What each close confirmation says and closes, shared by both panels. |
+| `src/memoria.ts` | Pure logic that keeps the saved record under Orca's 256 KiB per value: when a week of sessions doesn't fit, which ones it forgets first. |
 | `src/historial.ts` | Pure logic for the graphs: samples, real CPU between samples, stable session colors, and the roll-up that keeps the saved history under Orca's 256 KiB per value. |
 | `src/series.ts` | Pure logic that turns the history into stacked series and axis ticks. |
 | `src/protocol.ts` | The typed contract between the panel and the worker. |

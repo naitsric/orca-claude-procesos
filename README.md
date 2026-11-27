@@ -139,13 +139,19 @@ process that isn't Claude's or a worktree with work that would be lost.
 - **Checked again before every removal**: the worker reads the worktree again
   and leaves it alone if it has new commits, a session started working in it,
   or it has changes the confirmation didn't warn about.
+- **The palette command asks too**: *close inactive worktrees* removes nothing
+  by itself. It names the worktrees it found and leaves the question in the
+  panel's *Worktrees* tab, with the same list and the same confirmation as the
+  button. Nothing is removed unless you confirm there; cancel, or don't answer
+  within ten minutes, and the request is dropped.
 
 ### Always in sight
 - A **status bar item**, `Claude 5 · 2 orphans · 3 worktrees`, that turns
   amber when there are orphans and red when they hold ports. The worktree count
   is the ones proposed for closing. Click it to check now.
 - Three **command palette** entries: check now, close every certain orphan, and
-  close every inactive worktree with nothing to lose.
+  close inactive worktrees, which lists the ones with nothing to lose and asks
+  you to confirm in the panel.
 - A **desktop notification** the first time a worktree goes inactive.
 
 ### In your language
@@ -229,6 +235,12 @@ checks every few seconds and keeps a record of what it saw:
 - which processes descended from each session;
 - which process groups each session and each Bash shell led;
 - when each session ended (kept for seven days).
+
+That record is one stored value, and Orca stores at most 256 KiB per value.
+A week of sessions fits with room to spare (about 200 bytes each, so over a
+thousand sessions). If it ever didn't fit, the saved copy leaves out the oldest
+ended sessions, the ones that left no process running first, and keeps
+the rest.
 
 When a process's parent dies, it is adopted by `launchd` on macOS, and on
 Linux by `init` or by the `systemd --user` of the desktop session. An adopted
