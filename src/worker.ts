@@ -16,9 +16,12 @@ import { carpeta, memoria as fmtMem, puertos as fmtPuertos } from './formato'
 import { cerrarWorktrees, detenerLecturas, leerWorktrees, medirWorktrees } from './git'
 import {
   agregarMuestra,
+  ajustarHistorial,
   historialVacio,
   INTERVALO_MUESTRA_MS,
   leerHistorial,
+  LIMITE_HISTORIAL_BYTES,
+  pesoEnBytes,
   tomarMuestra,
   type CpuPrevia
 } from './historial'
@@ -64,8 +67,10 @@ let detenido = false
 /** Huérfanos de los que ya se avisó, para no repetir la notificación en cada revisión. */
 let avisados: Objetivo[] = []
 
-// Gráficas: el historial de la última media hora y lo necesario para la próxima muestra.
+// Gráficas: el historial de la última media hora y lo necesario para la próxima muestra. En
+// memoria va entero; a storage y a los paneles sale ajustado al límite (ajustarHistorial).
 let historial: Historial | null = null
+let leyendoHistorial: Promise<void> | null = null
 let cpuPrevia: CpuPrevia = new Map()
 /** El nombre de cada sesión según la última revisión completa (las muestras no leen archivos). */
 let nombres = new Map<number, string>()
@@ -421,9 +426,25 @@ function resumen(foto: Foto): string {
   return partes.join(' ')
 }
 
+/** Guarda el historial como quepa en un valor de storage: Orca rechaza los de más de 256 KiB. */
+async function guardarHistorial(orca: OrcaWorkerApi, h: Historial): Promise<void> {
+  await orca.storage
+    .set(CLAVE_HISTORIAL, ajustarHistorial(h) as unknown as JsonValue)
+    .catch((e: unknown) => orca.log(`storage.set historial: ${String(e)}`))
+}
+
+/** Una sola lectura de storage, compartida: la primera muestra y el pedido de un panel pueden
+ *  llegar a la vez, y una lectura tardía no debe pisar las muestras que ya se agregaron. */
 async function cargarHistorial(orca: OrcaWorkerApi): Promise<Historial> {
-  if (!historial) historial = leerHistorial(await orca.storage.get(CLAVE_HISTORIAL).catch(() => null), Date.now())
-  return historial
+  leyendoHistorial ??= (async () => {
+    const guardado = await orca.storage.get(CLAVE_HISTORIAL).catch(() => null)
+    historial ??= leerHistorial(guardado, Date.now())
+    // Un valor guardado que pasa del límite (de una versión que no lo cuidaba, o de otro Orca)
+    // se reemplaza enseguida por uno que cabe, sin esperar al próximo guardado.
+    if (pesoEnBytes(guardado) > LIMITE_HISTORIAL_BYTES) await guardarHistorial(orca, historial)
+  })()
+  await leyendoHistorial
+  return (historial ??= historialVacio())
 }
 
 /** Una muestra liviana para las gráficas: solo ps, sin lsof ni archivos. */
@@ -440,7 +461,7 @@ async function muestrear(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.post('procesos.muestra', { muestra, colores: historial.colores })
   if (++sinGuardar >= GUARDAR_CADA) {
     sinGuardar = 0
-    await orca.storage.set(CLAVE_HISTORIAL, historial as unknown as JsonValue)
+    await guardarHistorial(orca, historial)
   }
 }
 
@@ -470,6 +491,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   detenido = false
   localeOrca = null
   leyendoLocale = null
+  historial = null
+  leyendoHistorial = null
+  cpuPrevia = new Map()
+  sinGuardar = 0
   vida++
   lecturas = null
   lecturasEn = null
@@ -484,7 +509,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
   orca.panels.handle('procesos.cerrar', ({ objetivos, senal, arbol }) => cerrarProcesos(orca, objetivos, senal, arbol))
   orca.panels.handle('procesos.cerrarWorktrees', ({ objetivos }) => cerrarWorktreesPedidos(orca, objetivos))
-  orca.panels.handle('procesos.historial', async () => (await cargarHistorial(orca)) ?? historialVacio())
+  // Ajustado como al guardarlo: lo que viaja entre el worker y un panel tiene el mismo tope.
+  orca.panels.handle('procesos.historial', async () => ajustarHistorial(await cargarHistorial(orca)))
 
   orca.commands.register('revisar', async () => resumen(await revisar(orca)))
   orca.commands.register('cerrar-huerfanos', async () => {

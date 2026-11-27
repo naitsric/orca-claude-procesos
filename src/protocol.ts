@@ -20,7 +20,8 @@ declare module 'orca' {
       input: { objetivos: ObjetivoWorktree[] }
       output: { resultados: ResultadoWorktree[]; foto: Foto; faltan: number }
     }
-    /** La última media hora de muestras, para las gráficas. */
+    /** La última media hora de muestras, para las gráficas. Con muchas sesiones viene resumida
+     *  (`Muestra.ms`) para no pasar de `LIMITE_HISTORIAL_BYTES`. */
     'procesos.historial': { output: Historial }
   }
   interface PluginPanelEvents {

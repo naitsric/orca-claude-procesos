@@ -243,7 +243,10 @@ them show up as probable.
 seconds). It sums each session's memory and the CPU time its processes used
 since the previous sample. It keeps 30 minutes of samples and saves them once a minute,
 so the graphs survive a restart. Gaps in sampling show as gaps, never as
-interpolated lines.
+interpolated lines. Orca stores at most 256 KiB per value, and half an hour of
+samples passes that with more than about ten sessions open; then the saved copy
+keeps the whole half hour at a coarser step (one averaged sample every 10
+seconds, 20, 40…), and the graphs you have open stay at 5 seconds.
 
 **Worktrees.** Every ten minutes, and when you open the panel or press *Check
 now*, the worker looks for repositories: the folders Claude Code was opened in

@@ -38,6 +38,7 @@ import {
   marcas,
   marcasMemoria,
   masCercana,
+  tramosSinHuecos,
   type ColorSerie,
   type Datos,
   type Medida,
@@ -413,7 +414,7 @@ function pintarLeyenda(series: Serie[]): void {
 }
 
 /** Áreas apiladas con su línea de borde, ejes discretos y una mira con tooltip. */
-function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number, hasta: number, intervaloMs: number): void {
+function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number, hasta: number): void {
   cont.replaceChildren()
   if (datos.t.length < 2 || !datos.series.length) {
     cont.append(el('div', { class: 'vacio' }, t().actividad.juntando))
@@ -456,15 +457,7 @@ function grafica(cont: HTMLElement, datos: Datos, medida: Medida, desde: number,
   }
 
   // Tramos sin huecos: si el worker estuvo parado, la gráfica se corta en vez de inventar una rampa.
-  const tramos: [number, number][] = []
-  let inicio = 0
-  for (let k = 1; k < datos.t.length; k++) {
-    if (datos.t[k] - datos.t[k - 1] > intervaloMs * 3) {
-      tramos.push([inicio, k - 1])
-      inicio = k
-    }
-  }
-  tramos.push([inicio, datos.t.length - 1])
+  const tramos = tramosSinHuecos(datos)
 
   datos.series.forEach((serie, i) => {
     const arriba = pilas[i]
@@ -876,8 +869,8 @@ function pintarTodo(): void {
   pintarLeyenda(mem.series.length >= cpu.series.length ? mem.series : cpu.series)
   raiz.cpuAhora.textContent = ultima ? pct(total(ultima, 'cpu')) : ''
   raiz.memAhora.textContent = ultima ? memoria(total(ultima, 'rssKb')) : ''
-  grafica(raiz.cpu, cpu, 'cpu', desde, hasta, h.intervaloMs)
-  grafica(raiz.mem, mem, 'rssKb', desde, hasta, h.intervaloMs)
+  grafica(raiz.cpu, cpu, 'cpu', desde, hasta)
+  grafica(raiz.mem, mem, 'rssKb', desde, hasta)
   pintarRanking()
   pintarSesiones(ultima, h.colores)
   pintarTabla(muestras)
