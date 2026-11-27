@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "claude-procesos",
   "name": "Claude Processes",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Monitor for Claude Code sessions, the processes they start and the ones left orphaned, and the Git worktrees left open, with a verdict on which to close. In English and Spanish.",
   "icon": "design/icon-256.png",
   "author": {

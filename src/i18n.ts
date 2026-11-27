@@ -160,8 +160,8 @@ const en = {
     resumenWorktrees: (n: number, cerrar: number) =>
       `${pl(n, 'worktree', 'worktrees')}${cerrar ? `, ${cerrar} inactive with nothing to lose` : ''}.`,
     nadaWorktrees: 'No inactive worktrees to close.',
-    cerreWorktrees: (n: number) => `Closed ${pl(n, 'worktree', 'worktrees')}.`,
-    noCerrados: (lista: string) => ` Not closed: ${lista}.`
+    confirmaEnPanel: (n: number, nombres: string) =>
+      `${pl(n, 'inactive worktree', 'inactive worktrees')} with nothing to lose: ${nombres}. Nothing was closed: confirm in the Worktrees tab of the Claude Processes panel.`
   },
 
   /** Las confirmaciones y sus resultados (src/confirmar.ts). */
@@ -469,8 +469,8 @@ const es: Textos = {
     resumenWorktrees: (n, cerrar) =>
       `${pl(n, 'worktree', 'worktrees')}${cerrar ? `, ${pl(cerrar, 'inactivo', 'inactivos')} sin nada que perder` : ''}.`,
     nadaWorktrees: 'No hay worktrees inactivos que cerrar.',
-    cerreWorktrees: (n) => `Cerré ${pl(n, 'worktree', 'worktrees')}.`,
-    noCerrados: (lista) => ` Sin cerrar: ${lista}.`
+    confirmaEnPanel: (n, nombres) =>
+      `${pl(n, 'worktree inactivo', 'worktrees inactivos')} sin nada que perder: ${nombres}. No cerré nada: confirma en la pestaña Worktrees del panel «Procesos de Claude».`
   },
 
   confirmar: {

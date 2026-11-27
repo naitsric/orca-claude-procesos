@@ -24,10 +24,20 @@ function buscar(nodo: unknown, tipo: string, label?: string): Nodo | null {
 
 const texto = (nodo: unknown): string => JSON.stringify(nodo ?? null)
 
-function hostCon(foto: Foto, pedidos: Pedido[] = [], worktrees: ObjetivoWorktree[][] = []) {
+/** Las rutas de los worktrees de la foto con esos nombres, en ese orden. */
+const worktreesDe = (foto: Foto, nombres: readonly string[]): string[] =>
+  nombres.map((n) => foto.worktrees.find((w) => w.nombre === n)!.ruta)
+
+/** `comando.pedida`: si el comando «cerrar worktrees inactivos» dejó un pedido que nadie tomó. */
+function hostCon(foto: Foto, pedidos: Pedido[] = [], worktrees: ObjetivoWorktree[][] = [], comando = { pedida: false }) {
   return mockHost({
     requests: {
       'procesos.foto': () => foto,
+      'procesos.tomarConfirmacion': () => {
+        const pedida = comando.pedida
+        comando.pedida = false
+        return { pedida }
+      },
       'procesos.cerrarWorktrees': (input) => {
         worktrees.push(input.objetivos)
         const cerrados = new Set(input.objetivos.map((o) => o.ruta))
@@ -208,12 +218,74 @@ test('la pestaña de worktrees deja elegir, avisa de los cambios y no deja marca
   await view.unmount()
 })
 
+test('el comando de cerrar worktrees pregunta en la pestaña Worktrees, con la lista, y cancelar no cierra nada', async () => {
+  const worktrees: ObjetivoWorktree[][] = []
+  const comando = { pedida: false }
+  const foto = fotoDePrueba()
+  const view = await mount(panel, { host: hostCon(foto, [], worktrees, comando) })
+  assert.equal(view.valueOf({ type: 'Tabs' }), 'sesiones')
+  assert.ok(!/Close 2 worktrees\?/.test(view.summary().join('\n')), 'sin el comando no pregunta nada')
+
+  // El comando corre con el panel abierto: el worker avisa y el panel toma el pedido.
+  comando.pedida = true
+  await view.post('procesos.confirmarWorktrees', {})
+  await view.settled()
+  assert.equal(view.valueOf({ type: 'Tabs' }), 'worktrees', 'abre la pestaña Worktrees')
+  assert.match(view.summary().join('\n'), /Close 2 worktrees\?/)
+  const arbol = texto(view.tree())
+  assert.ok(arbol.includes('Closing (frees 840 MB):'))
+  assert.ok(arbol.includes('mi-app/agent-a1b2c3 · feat/exportar · no activity for 28 d · 500 MB'), 'con la lista de lo que cierra')
+  assert.ok(arbol.includes('mi-app/feat+pagos · worktree-feat+pagos · no activity for 12 d · 340 MB'))
+  assert.ok(arbol.indexOf('Close 2 worktrees?') > arbol.indexOf('"type":"Tabs"'), 'la pregunta sale dentro de la pestaña')
+  assert.deepEqual(
+    view.valueOf({ type: 'Table', label: 'Git worktrees' }),
+    worktreesDe(foto, ['agent-a1b2c3', 'feat+pagos']),
+    'y la tabla marca cuáles son'
+  )
+  assert.equal(comando.pedida, false, 'el pedido ya se tomó: no vuelve a preguntar')
+  assert.equal(worktrees.length, 0, 'nada se cierra sin confirmar')
+
+  await view.press({ text: 'Cancel' })
+  assert.equal(worktrees.length, 0)
+  assert.ok(!/Close 2 worktrees\?/.test(view.summary().join('\n')))
+  // Otro aviso sin pedido (lo tomó otro panel, o venció) no pregunta.
+  await view.post('procesos.confirmarWorktrees', {})
+  await view.settled()
+  assert.ok(!/Close 2 worktrees\?/.test(view.summary().join('\n')))
+  assert.equal(worktrees.length, 0)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('si el panel se abre después del comando, encuentra la pregunta; confirmada, cierra solo esos', async () => {
+  const pedidos: Pedido[] = []
+  const worktrees: ObjetivoWorktree[][] = []
+  const foto = fotoDePrueba()
+  const view = await mount(panel, { host: hostCon(foto, pedidos, worktrees, { pedida: true }) })
+  await view.settled()
+  assert.equal(view.valueOf({ type: 'Tabs' }), 'worktrees')
+  assert.match(view.summary().join('\n'), /Close 2 worktrees\?/)
+  assert.equal(worktrees.length, 0, 'abrir el panel no cierra nada')
+
+  await view.press({ text: 'Close 2 worktrees' })
+  assert.equal(pedidos.length, 0)
+  assert.deepEqual(worktrees.map((ws) => ws.map((o) => o.ruta)), [worktreesDe(foto, ['agent-a1b2c3', 'feat+pagos'])])
+  assert.ok(worktrees[0].every((o) => !o.conCambios), 'solo los que no tienen nada que perder')
+  assert.match(view.summary().join('\n'), /Closed 2 worktrees/)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
 test('un cierre largo responde con lo que lleva y termina con el aviso del worker', async () => {
   const foto = fotoDePrueba()
   const [uno, dos] = foto.worktrees
   const host = mockHost({
     requests: {
       'procesos.foto': () => foto,
+      'procesos.tomarConfirmacion': { pedida: false },
       'procesos.cerrarWorktrees': () => ({
         resultados: [{ ruta: uno.ruta, nombre: uno.nombre, resultado: 'cerrado' as const }],
         foto,
@@ -245,6 +317,7 @@ test('si el pedido vence mientras git borra, no lo da por fallido', async () => 
   const host = mockHost({
     requests: {
       'procesos.foto': () => fotoDePrueba(),
+      'procesos.tomarConfirmacion': { pedida: false },
       'procesos.cerrarWorktrees': () => {
         throw hostError('timeout', 'timed out')
       }

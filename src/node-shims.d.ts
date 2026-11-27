@@ -21,6 +21,8 @@ declare module 'node:fs/promises' {
   export function writeFile(path: string, data: string): Promise<void>
   export function rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>
   export function realpath(path: string): Promise<string>
+  // Solo para src/worker.test.ts, que le pone fecha vieja a un worktree de prueba.
+  export function utimes(path: string, atime: Date, mtime: Date): Promise<void>
 }
 
 declare module 'node:os' {

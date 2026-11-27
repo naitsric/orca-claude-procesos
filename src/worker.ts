@@ -26,10 +26,11 @@ import {
   type CpuPrevia
 } from './historial'
 import { idioma, resolverIdioma, t, usarIdioma, type Idioma } from './i18n'
-import { leerMemoria, mismoProceso, type Memoria } from './procesos'
+import { ajustarMemoria, LIMITE_MEMORIA_BYTES } from './memoria'
+import { leerMemoria, memoriaVacia, mismoProceso, type Memoria } from './procesos'
 import { cerrar, leerFilas, tomarFoto, uid, type Opciones } from './sistema'
 import type { Foto, Historial, Objetivo, ObjetivoWorktree, ResultadoCierre, ResultadoWorktree, Senal } from './tipos'
-import { agregarWorktrees, evaluarWorktrees, objetivoDe, type LecturaWorktree } from './worktrees'
+import { agregarWorktrees, evaluarWorktrees, type LecturaWorktree } from './worktrees'
 
 const CLAVE_MEMORIA = 'memoria'
 const CLAVE_HISTORIAL = 'historial'
@@ -50,6 +51,11 @@ const AVANCE_CADA_MS = 3000
 const WORKTREES_FRESCOS_MS = 20_000
 /** El historial se guarda cada minuto, no en cada muestra. */
 const GUARDAR_CADA = Math.round(60_000 / INTERVALO_MUESTRA_MS)
+/** Lo que espera a un panel el pedido de confirmar que deja el comando «cerrar worktrees
+ *  inactivos»: quien abra el panel mucho después no se encuentra con la pregunta. */
+const CONFIRMACION_VIGENTE_MS = 10 * 60_000
+/** Cuántos worktrees nombra ese comando en su respuesta; el panel los muestra todos. */
+const NOMBRES_EN_COMANDO = 5
 
 type Ajustes = Opciones & {
   intervaloSegundos: number
@@ -59,7 +65,10 @@ type Ajustes = Opciones & {
   idioma: Idioma
 }
 
+// La memoria va entera aquí; a storage sale ajustada al límite (ajustarMemoria).
 let memoria: Memoria | null = null
+let leyendoMemoria: Promise<void> | null = null
+/** El JSON de lo último que se guardó, para no escribir lo mismo en cada revisión. */
 let memoriaGuardada = ''
 let enCurso: Promise<unknown> = Promise.resolve()
 let temporizador: ReturnType<typeof setTimeout> | null = null
@@ -96,6 +105,9 @@ let vida = 0
 /** Las sesiones de la última foto: sus carpetas dicen en qué repositorios buscar. */
 let sesionesVistas: { cwd: string | null }[] = []
 let worktreesAvisados: Set<string> | null = null
+/** Cuándo dejó el comando «cerrar worktrees inactivos» su pedido de confirmar; null si no hay
+ *  ninguno o un panel ya lo tomó. */
+let confirmacionPedida: number | null = null
 
 function numero(valor: unknown, porDefecto: number, min: number, max: number): number {
   return typeof valor === 'number' && Number.isFinite(valor) ? Math.min(max, Math.max(min, valor)) : porDefecto
@@ -138,13 +150,35 @@ async function ajustes(orca: OrcaWorkerApi): Promise<Ajustes> {
   return op
 }
 
-async function cargarMemoria(orca: OrcaWorkerApi): Promise<Memoria> {
-  if (!memoria) {
-    const guardada = await orca.storage.get(CLAVE_MEMORIA).catch(() => null)
-    memoria = leerMemoria(guardada)
-    memoriaGuardada = JSON.stringify(memoria)
+/** Guarda la memoria como quepa en un valor de storage: Orca rechaza los de más de 256 KiB. Si
+ *  storage falla, la revisión sigue con la memoria que tiene y lo intenta en la próxima. */
+async function guardarMemoria(orca: OrcaWorkerApi, m: Memoria): Promise<void> {
+  const ajustada = ajustarMemoria(m)
+  const texto = JSON.stringify(ajustada)
+  if (texto === memoriaGuardada) return
+  try {
+    await orca.storage.set(CLAVE_MEMORIA, ajustada as unknown as JsonValue)
+    memoriaGuardada = texto
+  } catch (e) {
+    orca.log(`storage.set memoria: ${String(e)}`)
   }
-  return memoria
+}
+
+/** Una sola lectura de storage, compartida: la primera revisión y la primera muestra llegan a la
+ *  vez al arrancar, y una lectura tardía no debe pisar lo que la revisión ya anotó. */
+async function cargarMemoria(orca: OrcaWorkerApi): Promise<Memoria> {
+  leyendoMemoria ??= (async () => {
+    const guardada = await orca.storage.get(CLAVE_MEMORIA).catch(() => null)
+    const leida = leerMemoria(guardada)
+    memoria = leida
+    // Un valor guardado que pasa del límite (de una versión que no lo cuidaba, o de otro Orca)
+    // se reemplaza enseguida por uno que cabe, sin esperar a la primera revisión.
+    const cabe = pesoEnBytes(guardada) <= LIMITE_MEMORIA_BYTES
+    memoriaGuardada = cabe ? JSON.stringify(leida) : ''
+    if (!cabe) await guardarMemoria(orca, leida)
+  })()
+  await leyendoMemoria
+  return (memoria ??= memoriaVacia())
 }
 
 /** Una revisión o un cierre a la vez: los dos leen y escriben la memoria. */
@@ -182,11 +216,7 @@ function fotoConError(error: unknown): Foto {
 async function publicar(orca: OrcaWorkerApi, foto: Foto, nueva: Memoria | null, op: Ajustes): Promise<void> {
   if (nueva) {
     memoria = nueva
-    const texto = JSON.stringify(nueva)
-    if (texto !== memoriaGuardada) {
-      await orca.storage.set(CLAVE_MEMORIA, nueva as unknown as JsonValue)
-      memoriaGuardada = texto
-    }
+    await guardarMemoria(orca, nueva)
   }
   if (!foto.error) {
     nombres = new Map(foto.sesiones.map((s) => [s.pid, s.nombre ?? carpeta(s.cwd, foto.home)]))
@@ -449,15 +479,21 @@ async function cargarHistorial(orca: OrcaWorkerApi): Promise<Historial> {
 
 /** Una muestra liviana para las gráficas: solo ps, sin lsof ni archivos. */
 async function muestrear(orca: OrcaWorkerApi): Promise<void> {
+  // Si el worker se apaga (o vuelve a arrancar) mientras corre ps o lee storage, esta muestra ya
+  // no es de nadie: no debe leer ni cambiar la memoria y el historial con el `orca` de antes.
+  const mia = vida
   const ahora = Date.now()
   const filas = await leerFilas(ahora)
+  if (mia !== vida) return
   const { muestra, previa } = tomarMuestra(filas, await cargarMemoria(orca), uid(), cpuPrevia, nombres, ahora)
   // La CPU real necesita dos lecturas: la primera tras arrancar solo sirve de referencia (el
   // promedio de ps arrastra el último minuto y dibujaría un pico que no es de ahora).
   const primera = cpuPrevia.size === 0
   cpuPrevia = previa
   if (primera) return
-  historial = agregarMuestra(await cargarHistorial(orca), muestra)
+  const previo = await cargarHistorial(orca)
+  if (mia !== vida) return
+  historial = agregarMuestra(previo, muestra)
   orca.panels.post('procesos.muestra', { muestra, colores: historial.colores })
   if (++sinGuardar >= GUARDAR_CADA) {
     sinGuardar = 0
@@ -489,6 +525,9 @@ async function ciclo(orca: OrcaWorkerApi): Promise<void> {
 
 export default function activate(orca: OrcaWorkerApi): void {
   detenido = false
+  memoria = null
+  leyendoMemoria = null
+  memoriaGuardada = ''
   localeOrca = null
   leyendoLocale = null
   historial = null
@@ -503,12 +542,20 @@ export default function activate(orca: OrcaWorkerApi): void {
   midiendo = false
   cerrandoWorktrees = false
   worktreesAvisados = null
+  confirmacionPedida = null
   orca.panels.handle('procesos.foto', async (pedido) => {
     await anotarLocale(orca, pedido?.locale)
     return revisar(orca, WORKTREES_FRESCOS_MS)
   })
   orca.panels.handle('procesos.cerrar', ({ objetivos, senal, arbol }) => cerrarProcesos(orca, objetivos, senal, arbol))
   orca.panels.handle('procesos.cerrarWorktrees', ({ objetivos }) => cerrarWorktreesPedidos(orca, objetivos))
+  // El pedido es de un solo panel y de una sola vez: la pregunta no se repite en otro panel ni
+  // al volver a abrirlo.
+  orca.panels.handle('procesos.tomarConfirmacion', () => {
+    const pedida = confirmacionPedida !== null && Date.now() - confirmacionPedida <= CONFIRMACION_VIGENTE_MS
+    confirmacionPedida = null
+    return { pedida }
+  })
   // Ajustado como al guardarlo: lo que viaja entre el worker y un panel tiene el mismo tope.
   orca.panels.handle('procesos.historial', async () => ajustarHistorial(await cargarHistorial(orca)))
 
@@ -525,20 +572,23 @@ export default function activate(orca: OrcaWorkerApi): void {
     return t().worker.cerre(cerrados) + (vivos.length ? t().worker.siguenVivos(vivos.join(', ')) : '')
   })
 
+  // Un comando no tiene cómo preguntar: Orca solo muestra el texto que devuelve. Y esto borra
+  // carpetas, así que el comando no cierra nada: dice cuáles son y deja el pedido para el panel,
+  // que pregunta con la lista a la vista y solo cierra (por `procesos.cerrarWorktrees`) si ahí
+  // se confirma. Sin respuesta, el pedido vence y no pasa nada.
   orca.commands.register('cerrar-worktrees', async () => {
-    // Con una búsqueda recién hecha: el comando no tiene una lista a la vista que confirmar.
+    if (cerrandoWorktrees) return t().worktree.yaCerrando
+    // Con una búsqueda recién hecha: los que nombra son los que hay ahora.
     await buscarWorktrees(orca)
     const foto = await revisar(orca, Infinity)
-    const objetivos = worktreesParaCerrar(foto).map(objetivoDe)
-    if (!objetivos.length) return t().worker.nadaWorktrees
-    const { resultados, faltan } = await cerrarWorktreesPedidos(orca, objetivos)
-    const cerrados = resultados.filter((r) => r.resultado === 'cerrado').length
-    const fallidos = resultados.filter((r) => r.resultado !== 'cerrado').map((r) => `${r.nombre} (${r.detalle ?? r.resultado})`)
-    return (
-      t().worker.cerreWorktrees(cerrados) +
-      (fallidos.length ? t().worker.noCerrados(fallidos.join(', ')) : '') +
-      (faltan ? ` ${t().confirmar.sigueCerrando(faltan)}.` : '')
-    )
+    if (foto.error) return t().worker.noPudeLeer(foto.error)
+    const inactivos = worktreesParaCerrar(foto)
+    if (!inactivos.length) return t().worker.nadaWorktrees
+    confirmacionPedida = Date.now()
+    orca.panels.post('procesos.confirmarWorktrees', {})
+    const mas = inactivos.length - NOMBRES_EN_COMANDO
+    const nombres = inactivos.slice(0, NOMBRES_EN_COMANDO).map(nombreWorktree).join(', ') + (mas > 0 ? ` ${t().confirmar.yMas(mas)}` : '')
+    return t().worker.confirmaEnPanel(inactivos.length, nombres)
   })
 
   // Revisa enseguida: si cambió el idioma, los paneles y la barra lo toman de la nueva foto.
@@ -552,7 +602,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     .finally(() => cicloMuestras(orca))
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   detenido = true
   vida++
   detenerLecturas()
@@ -560,4 +610,11 @@ export function deactivate(): void {
   if (temporizadorMuestra) clearTimeout(temporizadorMuestra)
   temporizador = null
   temporizadorMuestra = null
+  // La revisión o el cierre de procesos que esté en curso termina antes de apagar: lo que guarda
+  // no queda a medias, ni sigue corriendo con el `orca` de antes si el worker vuelve a arrancar.
+  let cola: Promise<unknown> | null = null
+  while (cola !== enCurso) {
+    cola = enCurso
+    await cola
+  }
 }

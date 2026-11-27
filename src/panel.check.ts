@@ -5,5 +5,5 @@ import { fotoDePrueba } from './fixtures'
 
 export default defineCheck({
   maquina: { settings: { intervaloSegundos: 300, avisarHuerfanos: false } },
-  conHuerfanos: { requests: { 'procesos.foto': () => fotoDePrueba() } }
+  conHuerfanos: { requests: { 'procesos.foto': () => fotoDePrueba(), 'procesos.tomarConfirmacion': { pedida: false } } }
 })
