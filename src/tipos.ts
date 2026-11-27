@@ -192,10 +192,15 @@ export type Muestra = {
   sesiones: MuestraSesion[]
   huerfanosCpu: number
   huerfanosRssKb: number
+  /** Solo si resume varias muestras (el historial no cabía entero en storage): los milisegundos
+   *  que cubre, con el promedio de cada valor. `t` es la hora de la última. */
+  ms?: number
 }
 
 /** Las muestras de la última media hora y el color fijo de cada sesión (índice de paleta; -1 es
- *  «Otras»). El color sigue a la sesión: no cambia aunque otras aparezcan o se cierren. */
+ *  «Otras»). El color sigue a la sesión: no cambia aunque otras aparezcan o se cierren.
+ *  Guardado o camino a un panel no pasa de `LIMITE_HISTORIAL_BYTES` (src/historial.ts): con
+ *  muchas sesiones, las muestras vienen resumidas (`Muestra.ms`). */
 export type Historial = {
   muestras: Muestra[]
   colores: Record<string, number>

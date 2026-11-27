@@ -56,7 +56,7 @@ and how the language is chosen.
 | `src/panel.tsx` | The sessions, orphans and worktrees panel (Orca components). |
 | `src/graficas.ts` | The Claude Activity panel: HTML and SVG charts, since Orca's components have none. |
 | `src/confirmar.ts` | What each close confirmation says and closes, shared by both panels. |
-| `src/historial.ts` | Pure logic for the graphs: samples, real CPU between samples and stable session colors. |
+| `src/historial.ts` | Pure logic for the graphs: samples, real CPU between samples, stable session colors, and the roll-up that keeps the saved history under Orca's 256 KiB per value. |
 | `src/series.ts` | Pure logic that turns the history into stacked series and axis ticks. |
 | `src/protocol.ts` | The typed contract between the panel and the worker. |
 | `src/tipos.ts` | Data types shared by both sides. |

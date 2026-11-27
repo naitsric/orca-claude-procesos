@@ -8,8 +8,9 @@ export type ColorSerie = number | 'otras' | 'huerfanos'
 
 export type Serie = { clave: string; nombre: string; color: ColorSerie; valores: number[] }
 
-/** `series` va de abajo hacia arriba en la pila: huérfanos, las sesiones por color, «Otras». */
-export type Datos = { t: number[]; series: Serie[] }
+/** `series` va de abajo hacia arriba en la pila: huérfanos, las sesiones por color, «Otras».
+ *  `cubre` son los milisegundos de cada muestra: el intervalo, o más si resume varias. */
+export type Datos = { t: number[]; cubre: number[]; series: Serie[] }
 
 export type Medida = 'cpu' | 'rssKb'
 
@@ -45,7 +46,26 @@ export function construirSeries(h: Historial, desde: number, medida: Medida): Da
       )
     })
   }
-  return { t, series }
+  return { t, cubre: muestras.map((m) => m.ms ?? h.intervaloMs), series }
+}
+
+/**
+ * Los tramos sin huecos, como pares de índices: si el worker estuvo parado, la gráfica se corta
+ * en vez de inventar una rampa. Hay hueco cuando entre dos muestras pasa más del triple de lo
+ * que cubren (las resumidas cubren más, y van más separadas).
+ */
+export function tramosSinHuecos(datos: Pick<Datos, 't' | 'cubre'>): [number, number][] {
+  if (!datos.t.length) return []
+  const tramos: [number, number][] = []
+  let inicio = 0
+  for (let k = 1; k < datos.t.length; k++) {
+    if (datos.t[k] - datos.t[k - 1] > Math.max(datos.cubre[k], datos.cubre[k - 1]) * 3) {
+      tramos.push([inicio, k - 1])
+      inicio = k
+    }
+  }
+  tramos.push([inicio, datos.t.length - 1])
+  return tramos
 }
 
 /** La suma acumulada de cada serie, muestra por muestra: el borde superior de cada banda. */
