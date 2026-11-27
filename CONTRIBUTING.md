@@ -38,6 +38,9 @@ orca plugin validate .              # manifest
 `/proc` on Linux) of your machine, so they check the shape of the result and not
 its numbers. The logic and panel tests run against a made-up system in
 `src/fixtures.ts`, and `src/linux.test.ts` against a made-up Linux desktop.
+`src/git.test.ts` builds a real repository with worktrees in a temporary folder
+and closes them with your `git`; it points `CLAUDE_CONFIG_DIR` at that folder so
+it never looks at your own repositories.
 Tests run in English, the default language; `src/i18n.test.ts` covers Spanish
 and how the language is chosen.
 
@@ -46,9 +49,11 @@ and how the language is chosen.
 | File | What it does |
 | --- | --- |
 | `src/procesos.ts` | Pure logic. Parses `ps` and `lsof` output (and `/proc` on Linux), groups processes by session, finds orphans, assigns verdicts and keeps the record that survives between checks. |
-| `src/sistema.ts` | The only code that touches the machine. Runs `ps`, and `lsof` on macOS or reads `/proc` on Linux; reads `~/.claude/sessions/`, sends signals. |
-| `src/worker.ts` | Checks on an interval and saves the record to storage. Answers the panel and updates the status bar and notifications. |
-| `src/panel.tsx` | The sessions panel (Orca components). |
+| `src/sistema.ts` | With `src/git.ts`, the only code that touches the machine. Runs `ps`, and `lsof` on macOS or reads `/proc` on Linux; reads `~/.claude/sessions/`, sends signals. |
+| `src/worktrees.ts` | Pure logic for worktrees. Parses `git worktree list` and `git status`, decides each worktree's verdict from its inactivity and what closing it would lose, and checks every close against a fresh reading. |
+| `src/git.ts` | Touches the machine for worktrees. Finds the repositories Claude worked in, runs `git` and `du`, reads file dates, and removes worktrees. |
+| `src/worker.ts` | Checks on an interval and saves the record to storage. Looks for worktrees on a slower one. Answers the panel and updates the status bar and notifications. |
+| `src/panel.tsx` | The sessions, orphans and worktrees panel (Orca components). |
 | `src/graficas.ts` | The Claude Activity panel: HTML and SVG charts, since Orca's components have none. |
 | `src/confirmar.ts` | What each close confirmation says and closes, shared by both panels. |
 | `src/historial.ts` | Pure logic for the graphs: samples, real CPU between samples and stable session colors. |
@@ -67,6 +72,12 @@ and how the language is chosen.
   with tests there.
 - Never signal a process that is not in a fresh snapshot with the same start
   time. `cerrar` in `src/sistema.ts` enforces this; keep it that way.
+- Never remove a worktree that is not in a fresh reading at the same commit,
+  and never pass `--force` for changes the confirmation didn't show.
+  `validarCierre` in `src/worktrees.ts` enforces this; keep it that way.
+- Reading worktrees must not disturb them: `git` runs with
+  `GIT_OPTIONAL_LOCKS=0`, so it neither takes the index lock nor changes the
+  dates that count as activity.
 - Fixtures and tests use made-up names, paths and session IDs. Never use real
   ones.
 - Text the user sees goes in `src/i18n.ts`, in every language, never inline in

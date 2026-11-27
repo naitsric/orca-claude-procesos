@@ -1,33 +1,43 @@
 // `orca plugin test .` corre esto en Node con el mismo runtime y los mismos chequeos de Orca.
-import { assert, mockHost, mount, test } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test } from 'orca/testing'
 import { fotoDePrueba } from './fixtures'
 import * as panel from './panel'
-import type { Foto, Objetivo } from './tipos'
+import type { Foto, Objetivo, ObjetivoWorktree } from './tipos'
 
 type Nodo = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
 type Pedido = { objetivos: Objetivo[]; senal: string; arbol: boolean }
 
-/** El primer nodo de `tipo` en el árbol pintado. */
-function buscar(nodo: unknown, tipo: string): Nodo | null {
+/** El primer nodo de `tipo` en el árbol pintado (con ese `label`, si se pide). */
+function buscar(nodo: unknown, tipo: string, label?: string): Nodo | null {
   if (Array.isArray(nodo)) {
     for (const n of nodo) {
-      const r = buscar(n, tipo)
+      const r = buscar(n, tipo, label)
       if (r) return r
     }
     return null
   }
   if (!nodo || typeof nodo !== 'object') return null
   const n = nodo as Nodo
-  if (n.type === tipo) return n
-  return buscar(n.children ?? [], tipo)
+  if (n.type === tipo && (label === undefined || n.props?.label === label)) return n
+  return buscar(n.children ?? [], tipo, label)
 }
 
 const texto = (nodo: unknown): string => JSON.stringify(nodo ?? null)
 
-function hostCon(foto: Foto, pedidos: Pedido[] = []) {
+function hostCon(foto: Foto, pedidos: Pedido[] = [], worktrees: ObjetivoWorktree[][] = []) {
   return mockHost({
     requests: {
       'procesos.foto': () => foto,
+      'procesos.cerrarWorktrees': (input) => {
+        worktrees.push(input.objetivos)
+        const cerrados = new Set(input.objetivos.map((o) => o.ruta))
+        const quedan = foto.worktrees.filter((w) => !cerrados.has(w.ruta))
+        return {
+          resultados: input.objetivos.map((o) => ({ ruta: o.ruta, nombre: o.ruta.split('/').pop()!, resultado: 'cerrado' as const })),
+          foto: { ...foto, worktrees: quedan, totales: { ...foto.totales, worktrees: quedan.length, worktreesCerrar: 0, worktreesCerrarKb: 0 } },
+          faltan: 0
+        }
+      },
       'procesos.cerrar': (input) => {
         pedidos.push(input)
         return {
@@ -126,6 +136,136 @@ test('cerrar solo los procesos que sobran deja la sesión abierta', async () => 
   assert.equal(pedidos.length, 1)
   assert.deepEqual(pedidos[0].objetivos.map((o) => o.pid), [sobra.pid], 'solo el que sobra, no la sesión')
   assert.ok(!pedidos[0].objetivos.some((o) => o.pid === s.pid))
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('propone cerrar los worktrees inactivos y pregunta en el lugar del aviso', async () => {
+  const pedidos: Pedido[] = []
+  const worktrees: ObjetivoWorktree[][] = []
+  const view = await mount(panel, { host: hostCon(fotoDePrueba(), pedidos, worktrees) })
+  assert.match(view.summary().join('\n'), /2 inactive worktrees/)
+  assert.ok(view.find({ text: 'Worktrees (6)' }))
+  await view.press({ text: 'Close worktrees' })
+  const arbol = texto(view.tree())
+  assert.match(view.summary().join('\n'), /Close 2 worktrees\?/)
+  assert.ok(arbol.includes('Closing (frees 840 MB):'))
+  assert.ok(arbol.includes('mi-app/feat+pagos · worktree-feat+pagos · no activity for 12 d · 340 MB'))
+  assert.ok(arbol.includes('Their branches and commits stay in the repository.'))
+  assert.ok(arbol.indexOf('Close 2 worktrees?') < arbol.indexOf('"type":"Tabs"'), 'sale donde estaba el aviso')
+  assert.equal(worktrees.length, 0, 'nada se cierra sin confirmar')
+
+  await view.press({ text: 'Close 2 worktrees' })
+  assert.equal(pedidos.length, 0, 'no pide cerrar procesos')
+  assert.deepEqual(
+    worktrees[0].map((o) => o.ruta.split('/').pop()),
+    ['agent-a1b2c3', 'feat+pagos'],
+    'solo los inactivos sin nada que perder'
+  )
+  assert.ok(worktrees[0].every((o) => !o.conCambios))
+  assert.match(view.summary().join('\n'), /Closed 2 worktrees/)
+  assert.ok(view.find({ text: 'Worktrees (4)' }))
+  await view.press({ text: 'Done' })
+  assert.ok(!texto(view.tree()).includes('Closed 2 worktrees'))
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('la pestaña de worktrees deja elegir, avisa de los cambios y no deja marcar los que están en uso', async () => {
+  const worktrees: ObjetivoWorktree[][] = []
+  const foto = fotoDePrueba()
+  const view = await mount(panel, { host: hostCon(foto, [], worktrees) })
+  await view.select({ type: 'Tabs' }, 'worktrees')
+  const tabla = buscar(view.tree(), 'Table', 'Git worktrees')
+  const filas = (tabla?.props?.rows ?? []) as { key: string; cells: Record<string, unknown>; disabled?: boolean }[]
+  assert.deepEqual(
+    filas.map((f) => [f.cells.worktree, f.cells.estado, f.disabled]),
+    [
+      ['mi-app/agent-a1b2c3', 'Close', false],
+      ['mi-app/feat+pagos', 'Close', false],
+      ['mi-app/tarea', 'Review', true],
+      ['mi-app/fix+login', 'Review', false],
+      ['mi-app/mi-app-hotfix', 'Keep', false],
+      ['mi-app/agent-d4e5f6', 'Keep', true]
+    ]
+  )
+  const login = foto.worktrees.find((w) => w.nombre === 'fix+login')!
+  await view.selectRows({ type: 'Table', label: 'Git worktrees' }, [login.ruta])
+  const elegido = texto(view.tree())
+  assert.ok(elegido.includes('3 uncommitted changes: closing it discards them.'), 'el motivo del elegido')
+  assert.ok(elegido.includes('Branch: fix/login · 3 uncommitted changes · Created by: Claude Code'))
+  assert.ok(elegido.includes('~/www/mi-app/.claude/worktrees/fix+login'))
+
+  await view.press({ text: 'Close 1 selected' })
+  assert.match(view.summary().join('\n'), /Close 1 worktree\?/)
+  assert.ok(texto(view.tree()).includes('fix+login has uncommitted changes: they are discarded for good.'))
+  await view.press({ text: 'Close 1 worktree' })
+  assert.deepEqual(worktrees, [[{ ruta: login.ruta, head: login.head, conCambios: true }]])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('un cierre largo responde con lo que lleva y termina con el aviso del worker', async () => {
+  const foto = fotoDePrueba()
+  const [uno, dos] = foto.worktrees
+  const host = mockHost({
+    requests: {
+      'procesos.foto': () => foto,
+      'procesos.cerrarWorktrees': () => ({
+        resultados: [{ ruta: uno.ruta, nombre: uno.nombre, resultado: 'cerrado' as const }],
+        foto,
+        faltan: 1
+      })
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press({ text: 'Close worktrees' })
+  await view.press({ text: 'Close 2 worktrees' })
+  assert.match(view.summary().join('\n'), /Still closing 1 worktree/)
+  assert.ok(texto(view.tree()).includes('Git is still deleting the folders'))
+
+  await view.post('procesos.worktreesCerrados', {
+    resultados: [
+      { ruta: uno.ruta, nombre: uno.nombre, resultado: 'cerrado' },
+      { ruta: dos.ruta, nombre: dos.nombre, resultado: 'error', detalle: "Git couldn't remove it: busy" }
+    ]
+  })
+  const resumen = view.summary().join('\n')
+  assert.match(resumen, /Closed 1 of 2 worktrees/)
+  assert.ok(!/Still closing/.test(resumen))
+  assert.ok(texto(view.tree()).includes("feat+pagos: Git couldn't remove it: busy"))
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('si el pedido vence mientras git borra, no lo da por fallido', async () => {
+  const host = mockHost({
+    requests: {
+      'procesos.foto': () => fotoDePrueba(),
+      'procesos.cerrarWorktrees': () => {
+        throw hostError('timeout', 'timed out')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press({ text: 'Close worktrees' })
+  await view.press({ text: 'Close 2 worktrees' })
+  const resumen = view.summary().join('\n')
+  assert.match(resumen, /Still closing 2 worktrees/)
+  assert.ok(!/Couldn't close/.test(resumen))
+  await view.unmount()
+})
+
+test('mientras no termina la primera búsqueda, la pestaña de worktrees lo dice', async () => {
+  const con = fotoDePrueba()
+  const foto: Foto = { ...con, worktrees: [], worktreesRevisados: null, totales: { ...con.totales, worktrees: 0, worktreesCerrar: 0 } }
+  const view = await mount(panel, { host: hostCon(foto) })
+  assert.ok(view.find({ text: 'Worktrees (0)' }))
+  await view.select({ type: 'Tabs' }, 'worktrees')
+  assert.ok(texto(view.tree()).includes('Looking for worktrees'))
   assert.deepEqual(view.errors, [])
   await view.unmount()
 })

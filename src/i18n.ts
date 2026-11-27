@@ -47,6 +47,8 @@ const en = {
   sesiones: (n: number) => pl(n, 'session', 'sessions'),
   huerfanos: (n: number) => pl(n, 'orphan', 'orphans'),
   procesosHuerfanos: (n: number) => pl(n, 'orphaned process', 'orphaned processes'),
+  worktrees: (n: number) => pl(n, 'worktree', 'worktrees'),
+  worktreesInactivos: (n: number) => pl(n, 'inactive worktree', 'inactive worktrees'),
   /** Comillas alrededor del nombre de una sesión. */
   cita: (s: string) => `“${s}”`,
 
@@ -89,6 +91,38 @@ const en = {
     shellSinSesion: 'Bash shell of a Claude session that no longer exists.'
   },
 
+  /** Los motivos de los worktrees y por qué no se cierra uno (src/worktrees.ts, src/git.ts). */
+  worktree: {
+    origenes: { claude: 'Claude Code', agente: 'a Claude subagent', orca: 'Orca', otro: 'git worktree add' } as Record<string, string>,
+    headSuelto: 'detached HEAD',
+    bloqueado: (motivo: string) => `Locked in Git${motivo ? ` (“${motivo}”)` : ''}. Unlock it before closing it.`,
+    falta: "Its folder no longer exists: only Git's record of it is left.",
+    /** `sesion` ya viene entre comillas. */
+    enUso: (sesion: string) => `The session ${sesion} is working in it.`,
+    enUsoAgente: (sesion: string) => `A subagent of the session ${sesion} is working in it.`,
+    conHuerfano: (nombre: string) => `An orphaned process (${nombre}) is still running in it. Close that process first.`,
+    sinLeer: (error: string) => `Couldn't read its state: ${error}`,
+    orca: 'Orca workspace.',
+    orcaInactivo: (hace: string) => `Orca workspace with no activity for ${hace}. Close it from Orca's sidebar.`,
+    sinFecha: "Couldn't tell when it was last used.",
+    activo: (hace: string) => `Active ${hace} ago.`,
+    inactivo: (hace: string) => `No activity for ${hace}.`,
+    deAgente: ' A subagent left it behind.',
+    conCambios: (n: number) =>
+      ` It has ${pl(n, 'uncommitted change', 'uncommitted changes')}: closing it discards ${n === 1 ? 'it' : 'them'}.`,
+    commitsSueltos: (n: number) =>
+      ` ${n === 1 ? 'Its last commit is' : `Its last ${n} commits are`} on no branch: closing it loses ${n === 1 ? 'it' : 'them'}.`,
+    nadaQuePerder: (rama: string | null, sinSubir: number | null) =>
+      ` Nothing to lose: no uncommitted changes${
+        rama ? `, and the branch ${rama} stays${sinSubir ? ` with its ${pl(sinSubir, 'unpushed commit', 'unpushed commits')}` : ''}` : ''
+      }.`,
+    yaNoEsta: 'It no longer shows up as a worktree.',
+    cambio: 'It has new commits since you looked at it. Check it again.',
+    tieneCambios: 'It has uncommitted changes now. Check it again.',
+    gitFallo: (error: string) => `Git couldn't remove it: ${error}`,
+    yaCerrando: 'Still closing the worktrees from before. Wait for it to finish.'
+  },
+
   /** Lo que dice el sistema al cerrar (src/sistema.ts). */
   sistema: {
     noEncontre: (comando: string, procps: boolean) =>
@@ -116,7 +150,18 @@ const en = {
     paraRevisar: (n: number) => `${pl(n, 'session', 'sessions')} to review.`,
     nadaQueCerrar: 'No certain orphans to close.',
     cerre: (n: number) => `Closed ${pl(n, 'process', 'processes')}.`,
-    siguenVivos: (nombres: string) => ` Still running: ${nombres}.`
+    siguenVivos: (nombres: string) => ` Still running: ${nombres}.`,
+    worktreesParaCerrar: (n: number, disco: string) =>
+      `${pl(n, 'inactive worktree', 'inactive worktrees')} to close${disco ? ` (${disco})` : ''}`,
+    worktreesQuietos: (n: number, nombres: string) =>
+      n === 1
+        ? `1 worktree has gone unused and has nothing to lose: ${nombres}. Close it from the Worktrees tab.`
+        : `${n} worktrees have gone unused and have nothing to lose: ${nombres}. Close them from the Worktrees tab.`,
+    resumenWorktrees: (n: number, cerrar: number) =>
+      `${pl(n, 'worktree', 'worktrees')}${cerrar ? `, ${cerrar} inactive with nothing to lose` : ''}.`,
+    nadaWorktrees: 'No inactive worktrees to close.',
+    cerreWorktrees: (n: number) => `Closed ${pl(n, 'worktree', 'worktrees')}.`,
+    noCerrados: (lista: string) => ` Not closed: ${lista}.`
   },
 
   /** Las confirmaciones y sus resultados (src/confirmar.ts). */
@@ -163,7 +208,24 @@ const en = {
     cerreDe: (cerrados: number, total: number) => `Closed ${cerrados} of ${pl(total, 'process', 'processes')}`,
     workerNoRespondio: (error: string) => `The worker didn't respond: ${error}`,
     cerrados: (n: number) => `${pl(n, 'process', 'processes')} closed.`,
-    siguenVivos: (lista: string) => `Still running: ${lista}.`
+    siguenVivos: (lista: string) => `Still running: ${lista}.`,
+    cerrarWorktrees: (n: number) => `Close ${pl(n, 'worktree', 'worktrees')}?`,
+    seCierranWorktrees: (disco: string) => (disco ? `Closing (frees ${disco}):` : 'Closing:'),
+    sinActividad: (hace: string) => `no activity for ${hace}`,
+    soloRegistro: 'folder already gone',
+    ramasQuedan: (n: number): string =>
+      n === 1 ? 'Its branch and commits stay in the repository.' : 'Their branches and commits stay in the repository.',
+    carpetaSeBorra: (n: number) =>
+      `${n === 1 ? 'The folder is' : 'The folders are'} deleted with everything inside, ignored files included (node_modules, .env).`,
+    descartaCambios: (n: number, nombres: string) =>
+      `${nombres} ${n === 1 ? 'has' : 'have'} uncommitted changes: they are discarded for good.`,
+    pierdeCommits: (nombres: string) => `${nombres}: the commits that are on no branch are lost.`,
+    conActividad: (n: number, nombres: string) => `${nombres} had activity recently: make sure ${n === 1 ? 'it is' : 'they are'} done.`,
+    cerrarWorktreesN: (n: number) => `Close ${pl(n, 'worktree', 'worktrees')}`,
+    cerreWorktrees: (n: number) => `Closed ${pl(n, 'worktree', 'worktrees')}`,
+    cerreWorktreesDe: (cerrados: number, total: number) => `Closed ${cerrados} of ${pl(total, 'worktree', 'worktrees')}`,
+    sigueCerrando: (faltan: number) => `Still closing ${pl(faltan, 'worktree', 'worktrees')}`,
+    tardaEnBorrar: 'Git is still deleting the folders. The list shrinks as it goes.'
   },
 
   /** El panel «Claude Processes» (src/panel.tsx). */
@@ -208,7 +270,25 @@ const en = {
       `They kept running after their Claude session closed. They hold ${mem}${puertos ? ` and ${puertos}` : ''}.`,
     cerrarlo: 'Close it',
     cerrarTodos: 'Close all',
-    ver: 'View'
+    ver: 'View',
+    pestanaWorktrees: (n: number) => `Worktrees (${n})`,
+    columnasWorktrees: { worktree: 'Worktree', estado: 'Status', disco: 'Size', quieto: 'Idle' },
+    buscandoWorktrees: 'Looking for worktrees',
+    sinWorktrees: 'No worktrees',
+    ningunWorktree: 'No repository Claude Code worked in has a worktree open.',
+    explicaWorktrees:
+      'Worktrees of the repositories Claude Code worked in. “Close” marks the ones with no recent activity and nothing to lose. Closing one deletes its folder; its branch stays.',
+    worktreesTabla: 'Git worktrees',
+    marcarInactivos: 'Select inactive',
+    rama: 'Branch',
+    creadoPor: 'Created by',
+    cambiosSinConfirmar: (n: number) => pl(n, 'uncommitted change', 'uncommitted changes'),
+    commitsSinSubir: (n: number) => pl(n, 'unpushed commit', 'unpushed commits'),
+    worktreesSobran: (disco: string) =>
+      `Nobody has used them in a while and there is nothing to lose: no uncommitted changes, and their branches stay.${
+        disco ? ` They take ${disco}.` : ''
+      }`,
+    cerrarWorktrees: (n: number): string => (n === 1 ? 'Close worktree' : 'Close worktrees')
   },
 
   /** El panel «Claude Activity» (src/graficas.ts) y sus series (src/series.ts). */
@@ -285,6 +365,8 @@ const es: Textos = {
   sesiones: (n) => pl(n, 'sesión', 'sesiones'),
   huerfanos: (n) => pl(n, 'huérfano', 'huérfanos'),
   procesosHuerfanos: (n) => pl(n, 'proceso huérfano', 'procesos huérfanos'),
+  worktrees: (n) => pl(n, 'worktree', 'worktrees'),
+  worktreesInactivos: (n) => pl(n, 'worktree inactivo', 'worktrees inactivos'),
   cita: (s) => `«${s}»`,
 
   motivo: {
@@ -323,6 +405,38 @@ const es: Textos = {
     shellSinSesion: 'Shell de Bash de una sesión de Claude que ya no existe.'
   },
 
+  worktree: {
+    origenes: { claude: 'Claude Code', agente: 'un subagente de Claude', orca: 'Orca', otro: 'git worktree add' },
+    headSuelto: 'HEAD suelto',
+    bloqueado: (motivo) => `Bloqueado en Git${motivo ? ` («${motivo}»)` : ''}. Desbloquéalo antes de cerrarlo.`,
+    falta: 'Su carpeta ya no existe: solo queda el registro de Git.',
+    enUso: (sesion) => `La sesión ${sesion} trabaja en él.`,
+    enUsoAgente: (sesion) => `Un subagente de la sesión ${sesion} trabaja en él.`,
+    conHuerfano: (nombre) => `Un proceso huérfano (${nombre}) sigue corriendo en él. Cierra primero ese proceso.`,
+    sinLeer: (error) => `No pude leer su estado: ${error}`,
+    orca: 'Workspace de Orca.',
+    orcaInactivo: (hace) => `Workspace de Orca sin actividad desde hace ${hace}. Ciérralo desde la barra lateral de Orca.`,
+    sinFecha: 'No pude saber cuándo se usó por última vez.',
+    activo: (hace) => `Con actividad hace ${hace}.`,
+    inactivo: (hace) => `Sin actividad desde hace ${hace}.`,
+    deAgente: ' Lo dejó un subagente.',
+    conCambios: (n) =>
+      ` Tiene ${pl(n, 'cambio sin confirmar', 'cambios sin confirmar')}: al cerrarlo se ${n === 1 ? 'descarta' : 'descartan'}.`,
+    commitsSueltos: (n) =>
+      ` ${n === 1 ? 'Su último commit no está' : `Sus últimos ${n} commits no están`} en ninguna rama: al cerrarlo se ${
+        n === 1 ? 'pierde' : 'pierden'
+      }.`,
+    nadaQuePerder: (rama, sinSubir) =>
+      ` No hay nada que perder: no tiene cambios sin confirmar${
+        rama ? ` y la rama ${rama} se queda${sinSubir ? ` con ${pl(sinSubir, 'commit sin subir', 'commits sin subir')}` : ''}` : ''
+      }.`,
+    yaNoEsta: 'Ya no aparece como worktree.',
+    cambio: 'Tiene commits nuevos desde que lo viste. Revísalo otra vez.',
+    tieneCambios: 'Ahora tiene cambios sin confirmar. Revísalo otra vez.',
+    gitFallo: (error) => `Git no pudo quitarlo: ${error}`,
+    yaCerrando: 'Todavía estoy cerrando los worktrees de antes. Espera a que termine.'
+  },
+
   sistema: {
     noEncontre: (comando, procps) => `No encontré ${comando}${procps ? ' (viene en el paquete procps)' : ''}.`,
     yaNoEsDeClaude: 'Ya no aparece como proceso de Claude.',
@@ -345,7 +459,18 @@ const es: Textos = {
     paraRevisar: (n) => `${pl(n, 'sesión para revisar', 'sesiones para revisar')}.`,
     nadaQueCerrar: 'No hay huérfanos seguros que cerrar.',
     cerre: (n) => `Cerré ${pl(n, 'proceso', 'procesos')}.`,
-    siguenVivos: (nombres) => ` Siguen vivos: ${nombres}.`
+    siguenVivos: (nombres) => ` Siguen vivos: ${nombres}.`,
+    worktreesParaCerrar: (n, disco) =>
+      `${pl(n, 'worktree inactivo', 'worktrees inactivos')} para cerrar${disco ? ` (${disco})` : ''}`,
+    worktreesQuietos: (n, nombres) =>
+      n === 1
+        ? `1 worktree quedó sin uso y no tiene nada que perder: ${nombres}. Ciérralo desde la pestaña Worktrees.`
+        : `${n} worktrees quedaron sin uso y no tienen nada que perder: ${nombres}. Ciérralos desde la pestaña Worktrees.`,
+    resumenWorktrees: (n, cerrar) =>
+      `${pl(n, 'worktree', 'worktrees')}${cerrar ? `, ${pl(cerrar, 'inactivo', 'inactivos')} sin nada que perder` : ''}.`,
+    nadaWorktrees: 'No hay worktrees inactivos que cerrar.',
+    cerreWorktrees: (n) => `Cerré ${pl(n, 'worktree', 'worktrees')}.`,
+    noCerrados: (lista) => ` Sin cerrar: ${lista}.`
   },
 
   confirmar: {
@@ -390,7 +515,25 @@ const es: Textos = {
     cerreDe: (cerrados, total) => `Cerré ${cerrados} de ${pl(total, 'proceso', 'procesos')}`,
     workerNoRespondio: (error) => `El worker no respondió: ${error}`,
     cerrados: (n) => `${pl(n, 'proceso cerrado', 'procesos cerrados')}.`,
-    siguenVivos: (lista) => `Siguen vivos: ${lista}.`
+    siguenVivos: (lista) => `Siguen vivos: ${lista}.`,
+    cerrarWorktrees: (n) => `¿Cerrar ${pl(n, 'worktree', 'worktrees')}?`,
+    seCierranWorktrees: (disco) => (disco ? `Se cierran (libera ${disco}):` : 'Se cierran:'),
+    sinActividad: (hace) => `sin actividad hace ${hace}`,
+    soloRegistro: 'su carpeta ya no existe',
+    ramasQuedan: (n) =>
+      n === 1 ? 'Su rama y sus commits se quedan en el repositorio.' : 'Sus ramas y sus commits se quedan en el repositorio.',
+    carpetaSeBorra: (n) =>
+      `${n === 1 ? 'La carpeta se borra' : 'Las carpetas se borran'} con todo lo que hay dentro, también los archivos ignorados (node_modules, .env).`,
+    descartaCambios: (n, nombres) =>
+      `${nombres} ${n === 1 ? 'tiene' : 'tienen'} cambios sin confirmar: se descartan para siempre.`,
+    pierdeCommits: (nombres) => `${nombres}: los commits que no están en ninguna rama se pierden.`,
+    conActividad: (n, nombres) =>
+      `${nombres} ${n === 1 ? 'tuvo' : 'tuvieron'} actividad hace poco: confirma que ya ${n === 1 ? 'terminó' : 'terminaron'}.`,
+    cerrarWorktreesN: (n) => `Cerrar ${pl(n, 'worktree', 'worktrees')}`,
+    cerreWorktrees: (n) => `Cerré ${pl(n, 'worktree', 'worktrees')}`,
+    cerreWorktreesDe: (cerrados, total) => `Cerré ${cerrados} de ${pl(total, 'worktree', 'worktrees')}`,
+    sigueCerrando: (faltan) => `Sigo cerrando ${pl(faltan, 'worktree', 'worktrees')}`,
+    tardaEnBorrar: 'Git todavía está borrando las carpetas. La lista se acorta a medida que avanza.'
   },
 
   panel: {
@@ -434,7 +577,25 @@ const es: Textos = {
       `Siguieron vivos después de cerrar su sesión de Claude. Ocupan ${mem}${puertos ? ` y ${puertos}` : ''}.`,
     cerrarlo: 'Cerrarlo',
     cerrarTodos: 'Cerrar todos',
-    ver: 'Ver'
+    ver: 'Ver',
+    pestanaWorktrees: (n) => `Worktrees (${n})`,
+    columnasWorktrees: { worktree: 'Worktree', estado: 'Estado', disco: 'Tamaño', quieto: 'Quieto' },
+    buscandoWorktrees: 'Buscando worktrees',
+    sinWorktrees: 'Sin worktrees',
+    ningunWorktree: 'Ningún repositorio donde trabajó Claude Code tiene un worktree abierto.',
+    explicaWorktrees:
+      'Los worktrees de los repositorios donde trabajó Claude Code. «Cerrar» marca los que no tienen actividad reciente ni nada que perder. Cerrar uno borra su carpeta; su rama se queda.',
+    worktreesTabla: 'Worktrees de Git',
+    marcarInactivos: 'Marcar los inactivos',
+    rama: 'Rama',
+    creadoPor: 'Lo creó',
+    cambiosSinConfirmar: (n) => pl(n, 'cambio sin confirmar', 'cambios sin confirmar'),
+    commitsSinSubir: (n) => pl(n, 'commit sin subir', 'commits sin subir'),
+    worktreesSobran: (disco) =>
+      `Nadie los usa hace tiempo y no hay nada que perder: no tienen cambios sin confirmar y sus ramas se quedan.${
+        disco ? ` Ocupan ${disco}.` : ''
+      }`,
+    cerrarWorktrees: (n) => (n === 1 ? 'Cerrar worktree' : 'Cerrar worktrees')
   },
 
   actividad: {

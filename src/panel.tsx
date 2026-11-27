@@ -1,8 +1,10 @@
-// Panel lateral: sesiones de Claude, sus procesos y los huérfanos, con botones para cerrarlos.
+// Panel lateral: sesiones de Claude, sus procesos, los huérfanos y los worktrees que quedaron
+// abiertos, con botones para cerrarlos.
 // El worker (src/worker.ts) hace todo el trabajo; aquí solo se pinta la foto que publica.
 //
 // Cerrar algo pasa en el mismo lugar donde está el botón: la confirmación reemplaza a los botones
-// (dentro de la tarjeta de la sesión, debajo de la tabla de huérfanos o en el aviso de arriba), y
+// (dentro de la tarjeta de la sesión, debajo de la tabla de huérfanos o de worktrees, o en el
+// aviso de arriba), y
 // el resultado queda ahí mismo hasta que se pulsa «Listo». Cada acción lleva un `origen` para eso.
 import {
   atom,
@@ -38,17 +40,20 @@ import {
   confirmarForzar,
   confirmarHuerfanos,
   confirmarSesion,
+  confirmarWorktrees,
   estadoCorto,
   huerfanosSeguros,
   nombreSesion,
+  nombreWorktree,
   resumirHecho,
   tieneAviso,
+  worktreesParaCerrar,
   type Hecho,
   type Pendiente
 } from './confirmar'
 import { abreviarRuta, carpeta, duracion, memoria, porcentaje, puertos } from './formato'
 import { idiomaDeLocale, t, usarIdioma } from './i18n'
-import type { Foto, Huerfano, Proceso, Sesion } from './tipos'
+import type { Foto, Huerfano, Proceso, Sesion, Worktree } from './tipos'
 
 const foto = atom<Foto | null>(null)
 const falloPedido = atom<string | null>(null)
@@ -56,11 +61,15 @@ const pendiente = atom<Pendiente | null>(null)
 /** El origen de la acción que se está ejecutando. */
 const cerrando = atom<string | null>(null)
 const hecho = atom<Hecho | null>(null)
-/** Filas marcadas por tabla: `s<pid>` para cada sesión, `huerfanos` para la otra pestaña. */
+/** Filas marcadas por tabla: `s<pid>` para cada sesión, y `huerfanos` y `worktrees` para sus pestañas. */
 const seleccion = atom<Record<string, string[]>>({})
 const abiertas = atom<Record<string, boolean>>({})
 const pestana = atom('pestana', 'sesiones', { persist: 'plugin' })
 const soloRevisar = atom('soloRevisar', false, { persist: 'plugin' })
+
+/** Lo más que Orca deja esperar un pedido al worker. Borrar carpetas con node_modules tarda
+ *  bastante más que mandar una señal. */
+const PLAZO_WORKTREES_MS = 120_000
 
 function mensaje(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -85,16 +94,33 @@ async function ejecutar(p: Pendiente): Promise<void> {
   set(pendiente, null)
   set(cerrando, p.origen)
   try {
-    const respuesta = await plugin.request(
-      'procesos.cerrar',
-      { objetivos: p.objetivos, senal: p.senal, arbol: p.arbol },
-      { timeoutMs: 60_000 }
-    )
-    recibir(respuesta.foto)
-    set(hecho, { origen: p.origen, titulo: p.hecho, lista: respuesta.resultados })
+    if (p.worktrees) {
+      const respuesta = await plugin.request('procesos.cerrarWorktrees', { objetivos: p.worktrees }, { timeoutMs: PLAZO_WORKTREES_MS })
+      recibir(respuesta.foto)
+      set(hecho, {
+        origen: p.origen,
+        titulo: p.hecho,
+        lista: [],
+        worktrees: respuesta.resultados,
+        ...(respuesta.faltan ? { faltan: respuesta.faltan } : {})
+      })
+    } else {
+      const respuesta = await plugin.request(
+        'procesos.cerrar',
+        { objetivos: p.objetivos, senal: p.senal, arbol: p.arbol },
+        { timeoutMs: 60_000 }
+      )
+      recibir(respuesta.foto)
+      set(hecho, { origen: p.origen, titulo: p.hecho, lista: respuesta.resultados })
+    }
     set(seleccion, {})
   } catch (error) {
-    set(hecho, { origen: p.origen, titulo: p.hecho, lista: [], error: mensaje(error) })
+    // El worker sigue borrando aunque el pedido venza: su foto llega cuando termina.
+    if (p.worktrees && (error as { code?: string }).code === 'timeout') {
+      set(hecho, { origen: p.origen, titulo: p.hecho, lista: [], worktrees: [], faltan: p.worktrees.length })
+    } else {
+      set(hecho, { origen: p.origen, titulo: p.hecho, lista: [], error: mensaje(error) })
+    }
   } finally {
     set(cerrando, null)
   }
@@ -104,6 +130,13 @@ export function setup(ctx: PanelContext): void {
   // Hasta la primera foto, el idioma de Orca.
   usarIdioma(idiomaDeLocale(env.locale))
   ctx.subscriptions.push(plugin.on('procesos.foto', recibir))
+  // El final de un cierre largo: el resultado completo reemplaza al «sigo cerrando».
+  ctx.subscriptions.push(
+    plugin.on('procesos.worktreesCerrados', ({ resultados }) => {
+      const h = read(hecho)
+      if (h?.faltan) set(hecho, { origen: h.origen, titulo: h.titulo, lista: [], worktrees: resultados })
+    })
+  )
   void refrescar()
 }
 
@@ -428,6 +461,155 @@ function PestanaHuerfanos(props: { f: Foto; ocupado: boolean }) {
   )
 }
 
+function columnasWorktrees(): readonly TableColumn[] {
+  const c = t().panel.columnasWorktrees
+  return [
+    { key: 'worktree', label: c.worktree, minWidth: 'sm' },
+    { key: 'estado', label: c.estado, width: 'xs' },
+    { key: 'disco', label: c.disco, width: 'xs', align: 'end' },
+    { key: 'quieto', label: c.quieto, width: 'xs', align: 'end', hideBelow: 'sm' }
+  ]
+}
+
+function filaWorktree(w: Worktree): TableRow {
+  return {
+    key: w.ruta,
+    cells: {
+      worktree: nombreWorktree(w),
+      estado: t().veredictos[w.veredicto],
+      disco: w.kb === null ? '—' : memoria(w.kb),
+      quieto: w.ultimaActividad === null ? '—' : { type: 'relative', at: w.ultimaActividad, format: 'duration' }
+    },
+    // Los que no se pueden cerrar (en uso, de Orca, bloqueados) tampoco se marcan.
+    disabled: !w.cerrable
+  }
+}
+
+function DetallesWorktrees(props: { lista: readonly Worktree[]; home: string }) {
+  if (!props.lista.length) return null
+  const tx = t()
+  return (
+    <Stack gap="sm">
+      {props.lista.slice(0, 3).map((w) => (
+        <Stack gap="xs">
+          <Text size="sm" weight="medium">
+            {nombreWorktree(w)}
+          </Text>
+          <Text size="sm" tone={w.veredicto === 'revisar' ? 'warning' : undefined}>
+            {w.motivo}
+          </Text>
+          <Text muted size="xs">
+            {[
+              `${tx.panel.rama}: ${w.rama ?? tx.worktree.headSuelto}`,
+              w.cambios + w.sinSeguir ? tx.panel.cambiosSinConfirmar(w.cambios + w.sinSeguir) : null,
+              w.sinSubir ? tx.panel.commitsSinSubir(w.sinSubir) : null,
+              `${tx.panel.creadoPor}: ${tx.worktree.origenes[w.origen]}`
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+          <Code block>{abreviarRuta(w.ruta, props.home)}</Code>
+        </Stack>
+      ))}
+      {props.lista.length > 3 ? <Text muted size="xs">{tx.panel.yMas(props.lista.length - 3)}</Text> : null}
+    </Stack>
+  )
+}
+
+function PestanaWorktrees(props: { f: Foto; ocupado: boolean }) {
+  const { f, ocupado } = props
+  const tx = t().panel
+  if (f.worktreesRevisados === null) return <Skeleton lines={3} label={tx.buscandoWorktrees} />
+  if (!f.worktrees.length) {
+    return (
+      <Stack gap="sm">
+        <Accion origen="worktrees" />
+        <EmptyState icon="check" title={tx.sinWorktrees} description={tx.ningunWorktree} />
+      </Stack>
+    )
+  }
+  const marcados = new Set(read(seleccion).worktrees ?? [])
+  const elegidos = f.worktrees.filter((w) => marcados.has(w.ruta) && w.cerrable)
+  const inactivos = worktreesParaCerrar(f)
+  // La foto trae como mucho 200; los totales cuentan todos.
+  const fuera = f.totales.worktrees - f.worktrees.length
+  return (
+    <Stack gap="sm">
+      <Text muted size="sm">
+        {tx.explicaWorktrees}
+      </Text>
+      <Table
+        label={tx.worktreesTabla}
+        columns={columnasWorktrees()}
+        rows={f.worktrees.map(filaWorktree)}
+        selectionMode="multiple"
+        selected={elegidos.map((w) => w.ruta)}
+        onSelectionChange={({ keys }) => update(seleccion, (sel) => ({ ...sel, worktrees: keys }))}
+        maxHeight="lg"
+      />
+      {fuera > 0 ? (
+        <Text muted size="xs">
+          {tx.yMas(fuera)}
+        </Text>
+      ) : null}
+      <DetallesWorktrees lista={elegidos} home={f.home} />
+      {activo('worktrees') ? (
+        <Accion origen="worktrees" />
+      ) : (
+        <Row gap="xs" wrap>
+          <Button
+            size="sm"
+            tone="danger"
+            disabled={!elegidos.length || ocupado}
+            onPress={() => pedir(confirmarWorktrees('worktrees', elegidos, f.tomadaEn))}
+          >
+            {tx.cerrarSeleccionados(elegidos.length)}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!inactivos.length}
+            onPress={() => update(seleccion, (sel) => ({ ...sel, worktrees: inactivos.map((w) => w.ruta) }))}
+          >
+            {tx.marcarInactivos}
+          </Button>
+        </Row>
+      )}
+    </Stack>
+  )
+}
+
+/** El aviso de arriba cuando hay worktrees inactivos sin nada que perder; su confirmación sale
+ *  en su lugar. Es la propuesta del plugin: de una, solo los que no pierden nada. */
+function AvisoWorktrees(props: { f: Foto; ocupado: boolean }) {
+  const { f, ocupado } = props
+  if (activo('aviso-worktrees')) return <Accion origen="aviso-worktrees" />
+  const inactivos = worktreesParaCerrar(f)
+  if (!inactivos.length) return null
+  const tx = t()
+  const disco = f.totales.worktreesCerrarKb
+  return (
+    <Callout tone="warning" title={tx.worktreesInactivos(inactivos.length)} icon="branch">
+      <Stack gap="sm">
+        <Text size="sm">{tx.panel.worktreesSobran(disco ? memoria(disco) : '')}</Text>
+        <Row gap="xs">
+          <Button
+            size="sm"
+            tone="danger"
+            disabled={ocupado}
+            onPress={() => pedir(confirmarWorktrees('aviso-worktrees', inactivos, f.tomadaEn))}
+          >
+            {tx.panel.cerrarWorktrees(inactivos.length)}
+          </Button>
+          <Button size="sm" variant="ghost" onPress={() => set(pestana, 'worktrees')}>
+            {tx.panel.ver}
+          </Button>
+        </Row>
+      </Stack>
+    </Callout>
+  )
+}
+
 /** El aviso de arriba cuando hay huérfanos seguros; su confirmación sale en su lugar. */
 function AvisoHuerfanos(props: { f: Foto; ocupado: boolean }) {
   const { f, ocupado } = props
@@ -491,6 +673,7 @@ export default function Panel() {
       ) : null}
 
       {f && !f.error ? <AvisoHuerfanos f={f} ocupado={ocupado} /> : null}
+      {f && !f.error ? <AvisoWorktrees f={f} ocupado={ocupado} /> : null}
 
       {!f ? (
         fallo ? null : <Skeleton lines={4} label={tx.panel.revisando} />
@@ -501,6 +684,9 @@ export default function Panel() {
           </Tab>
           <Tab value="huerfanos" label={tx.panel.pestanaHuerfanos(f.huerfanos.length)} icon="warning">
             <PestanaHuerfanos f={f} ocupado={ocupado} />
+          </Tab>
+          <Tab value="worktrees" label={tx.panel.pestanaWorktrees(f.totales.worktrees)} icon="branch">
+            <PestanaWorktrees f={f} ocupado={ocupado} />
           </Tab>
         </Tabs>
       )}

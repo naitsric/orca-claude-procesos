@@ -86,6 +86,68 @@ export type Totales = {
   huerfanosRssKb: number
   /** Puertos que ocupan los huérfanos. */
   puertosHuerfanos: number[]
+  /** Worktrees enlazados que encontró la última búsqueda. */
+  worktrees: number
+  /** Los que el plugin propone cerrar (veredicto `cerrar`) y lo que ocupan en disco. */
+  worktreesCerrar: number
+  worktreesCerrarKb: number
+}
+
+// ---------------------------------------------------------------------------------------------
+// Worktrees
+
+/**
+ * De dónde salió un worktree.
+ * claude: de `claude --worktree` o de la herramienta EnterWorktree (vive en `.claude/worktrees/`).
+ * agente: de un subagente aislado (Claude lo bloquea con «claude agent …»).
+ * orca: un workspace de Orca. otro: cualquier otro `git worktree add`.
+ */
+export type OrigenWorktree = 'claude' | 'agente' | 'orca' | 'otro'
+
+/** Un worktree enlazado (nunca la carpeta principal del repositorio). */
+export type Worktree = {
+  ruta: string
+  /** La carpeta principal del repositorio al que pertenece. */
+  repo: string
+  /** El último segmento de la ruta. */
+  nombre: string
+  /** null con HEAD suelto. */
+  rama: string | null
+  /** El commit en el que está. Junto a la ruta identifica lo que viste al pedir que se cierre. */
+  head: string
+  origen: OrigenWorktree
+  /** Archivos con cambios sin confirmar y archivos sin seguir: lo que se pierde al cerrarlo. */
+  cambios: number
+  sinSeguir: number
+  /** Commits que la rama no ha subido. null si la rama no tiene upstream. */
+  sinSubir: number | null
+  /** Con HEAD suelto: commits a los que no llega ninguna rama ni etiqueta. Se pierden al cerrarlo. */
+  commitsSueltos: number
+  /** La última vez que algo se movió ahí: un commit, un archivo sin confirmar, una conversación. */
+  ultimaActividad: number | null
+  /** Lo que ocupa en disco. null hasta que se mide. */
+  kb: number | null
+  /** La sesión viva que trabaja en él. */
+  enUso: { pid: number; nombre: string | null } | null
+  /** El motivo del bloqueo de Git (`git worktree lock`), si lo tiene. */
+  bloqueo: string | null
+  /** Su carpeta ya no existe: solo queda el registro de Git. */
+  falta: boolean
+  veredicto: Veredicto
+  motivo: string
+  /** Si el plugin lo deja cerrar. No: lo usa una sesión, es de Orca, lo bloqueó otro o no se pudo leer. */
+  cerrable: boolean
+}
+
+/** Un worktree a cerrar, como lo viste: `head` evita cerrar uno que cambió después, y
+ *  `conCambios` dice si la confirmación ya avisó de que sus cambios sin confirmar se descartan. */
+export type ObjetivoWorktree = { ruta: string; head: string; conCambios: boolean }
+
+export type ResultadoWorktree = {
+  ruta: string
+  nombre: string
+  resultado: 'cerrado' | 'rechazado' | 'error'
+  detalle?: string
 }
 
 /** Una foto del sistema: lo que el worker devuelve y publica en cada revisión. */
@@ -97,6 +159,10 @@ export type Foto = {
   home: string
   sesiones: Sesion[]
   huerfanos: Huerfano[]
+  /** Los worktrees de Git de los repositorios donde trabajó Claude, según la última búsqueda. */
+  worktrees: Worktree[]
+  /** Cuándo terminó esa búsqueda. null: todavía no hay ninguna (corre aparte de las revisiones). */
+  worktreesRevisados: number | null
   totales: Totales
   /** El worker no pudo leer los procesos; el resto viene vacío. */
   error?: string

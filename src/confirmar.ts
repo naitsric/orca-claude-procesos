@@ -3,7 +3,20 @@
 // cierran lo mismo, y se prueba en Node.
 import { carpeta, duracion, memoria, plural, puertos } from './formato'
 import { t } from './i18n'
-import type { Foto, Huerfano, Objetivo, Proceso, ResultadoCierre, Rol, Senal, Sesion } from './tipos'
+import type {
+  Foto,
+  Huerfano,
+  Objetivo,
+  ObjetivoWorktree,
+  Proceso,
+  ResultadoCierre,
+  ResultadoWorktree,
+  Rol,
+  Senal,
+  Sesion,
+  Worktree
+} from './tipos'
+import { objetivoDe } from './worktrees'
 
 export type Tono = 'warning' | 'danger'
 
@@ -26,9 +39,20 @@ export type Pendiente = {
   objetivos: Objetivo[]
   senal: Senal
   arbol: boolean
+  /** Si lo que se cierra son worktrees y no procesos: van por `procesos.cerrarWorktrees`. */
+  worktrees?: ObjetivoWorktree[]
 }
 
-export type Hecho = { origen: string; titulo: string; lista: ResultadoCierre[]; error?: string }
+/** `worktrees` trae el resultado cuando lo que se cerró fueron worktrees (y `lista` va vacía). */
+export type Hecho = {
+  origen: string
+  titulo: string
+  lista: ResultadoCierre[]
+  worktrees?: ResultadoWorktree[]
+  /** Cuántos worktrees le faltan a git por borrar: el worker respondió antes de terminar. */
+  faltan?: number
+  error?: string
+}
 
 /** Cómo se llama un tipo de proceso: en singular, o con su número delante. */
 function rol(r: Rol, n?: number): string {
@@ -231,8 +255,87 @@ export function confirmarForzar(origen: string, vivos: readonly ResultadoCierre[
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Worktrees
+
+/** `repo/nombre`: dos repositorios pueden tener un worktree con el mismo nombre. */
+export function nombreWorktree(w: Pick<Worktree, 'repo' | 'nombre'>): string {
+  return `${carpeta(w.repo)}/${w.nombre}`
+}
+
+/** Los que se pueden cerrar de una: sin actividad reciente y sin nada que perder. */
+export function worktreesParaCerrar(f: Foto): Worktree[] {
+  return f.worktrees.filter((w) => w.veredicto === 'cerrar' && w.cerrable)
+}
+
+export function confirmarWorktrees(origen: string, elegidos: readonly Worktree[], ahora: number): Pendiente | null {
+  const lista = elegidos.filter((w) => w.cerrable)
+  if (!lista.length) return null
+  const c = t().confirmar
+  const n = lista.length
+  const disco = lista.reduce((kb, w) => kb + (w.kb ?? 0), 0)
+  const nombres = (ws: readonly Worktree[]): string => ws.map((w) => w.nombre).join(', ')
+  const conCambios = lista.filter((w) => w.cambios + w.sinSeguir > 0)
+  const conSueltos = lista.filter((w) => w.commitsSueltos > 0)
+  const recientes = lista.filter((w) => w.veredicto === 'dejar')
+  const notas: Nota[] = []
+  if (conCambios.length) notas.push({ texto: c.descartaCambios(conCambios.length, nombres(conCambios)), tono: 'danger' })
+  if (conSueltos.length) notas.push({ texto: c.pierdeCommits(nombres(conSueltos)), tono: 'danger' })
+  if (recientes.length) notas.push({ texto: c.conActividad(recientes.length, nombres(recientes)), tono: 'warning' })
+  if (lista.some((w) => w.rama)) notas.push({ texto: c.ramasQuedan(lista.filter((w) => w.rama).length) })
+  if (lista.some((w) => !w.falta)) notas.push({ texto: c.carpetaSeBorra(lista.filter((w) => !w.falta).length) })
+  const items = lista.slice(0, 5).map((w) =>
+    [
+      nombreWorktree(w),
+      w.rama ?? t().worktree.headSuelto,
+      w.falta ? c.soloRegistro : w.ultimaActividad !== null ? c.sinActividad(duracion(ahora - w.ultimaActividad)) : null,
+      w.kb !== null ? memoria(w.kb) : null
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  )
+  if (n > 5) items.push(c.yMas(n - 5))
+  return {
+    origen,
+    titulo: c.cerrarWorktrees(n),
+    tono: conCambios.length || conSueltos.length ? 'danger' : 'warning',
+    encabezado: c.seCierranWorktrees(disco ? memoria(disco) : ''),
+    items,
+    notas,
+    boton: c.cerrarWorktreesN(n),
+    cancelar: c.cancelar,
+    hecho: c.cerreWorktrees(n),
+    objetivos: [],
+    senal: 'TERM',
+    arbol: false,
+    worktrees: lista.map(objetivoDe)
+  }
+}
+
 /** Cómo se cuenta un resultado: título, si salió todo bien, las líneas y los que siguen vivos. */
 export function resumirHecho(h: Hecho): { titulo: string; todoBien: boolean; lineas: string[]; vivos: ResultadoCierre[] } {
+  if (h.worktrees) {
+    const c = t().confirmar
+    const cerrados = h.worktrees.filter((r) => r.resultado === 'cerrado')
+    const fallidos = h.worktrees.filter((r) => r.resultado !== 'cerrado')
+    const todoBien = !h.error && !fallidos.length
+    return {
+      titulo: h.error
+        ? c.noSePudo
+        : h.faltan
+          ? c.sigueCerrando(h.faltan)
+          : todoBien
+            ? h.titulo
+            : c.cerreWorktreesDe(cerrados.length, h.worktrees.length),
+      todoBien: todoBien && !h.faltan,
+      lineas: [
+        ...(h.faltan ? [c.tardaEnBorrar] : []),
+        ...(h.error ? [c.workerNoRespondio(h.error)] : []),
+        ...fallidos.map((r) => `${r.nombre}: ${r.detalle ?? r.resultado}`)
+      ],
+      vivos: []
+    }
+  }
   const cerrados = h.lista.filter((r) => r.resultado === 'cerrado')
   const vivos = h.lista.filter((r) => r.resultado === 'sigue-vivo')
   const fallidos = h.lista.filter((r) => r.resultado === 'rechazado' || r.resultado === 'error')

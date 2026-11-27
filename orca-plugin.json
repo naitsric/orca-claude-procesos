@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "claude-procesos",
   "name": "Claude Processes",
-  "version": "0.5.0",
-  "description": "Monitor for Claude Code sessions, the processes they start and the ones left orphaned, with a verdict on which to close. In English and Spanish.",
+  "version": "0.6.0",
+  "description": "Monitor for Claude Code sessions, the processes they start and the ones left orphaned, and the Git worktrees left open, with a verdict on which to close. In English and Spanish.",
   "icon": "design/icon-256.png",
   "author": {
     "name": "naitsric",
@@ -43,6 +43,10 @@
       {
         "id": "cerrar-huerfanos",
         "title": "Claude Processes: close certain orphans"
+      },
+      {
+        "id": "cerrar-worktrees",
+        "title": "Claude Processes: close inactive worktrees"
       }
     ],
     "statusBarItems": [
@@ -94,6 +98,22 @@
         "key": "avisarHuerfanos",
         "title": "Notify about orphans",
         "description": "A desktop notification the first time a Claude process outlives its session.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "diasWorktreeInactivo",
+        "title": "Days before a worktree counts as inactive",
+        "description": "A Git worktree with no commits, uncommitted edits or Claude conversations for this long is proposed for closing if it has nothing to lose, and marked for review otherwise.",
+        "type": "integer",
+        "default": 7,
+        "minimum": 1,
+        "maximum": 365
+      },
+      {
+        "key": "avisarWorktrees",
+        "title": "Notify about inactive worktrees",
+        "description": "A desktop notification the first time a worktree goes inactive with nothing to lose.",
         "type": "boolean",
         "default": true
       }
