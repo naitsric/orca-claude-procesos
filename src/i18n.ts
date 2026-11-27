@@ -128,7 +128,9 @@ const en = {
     noEncontre: (comando: string, procps: boolean) =>
       `Couldn't find ${comando}${procps ? ' (it comes in the procps package)' : ''}.`,
     yaNoEsDeClaude: 'It no longer shows up as a Claude process.',
-    otroProceso: 'That pid now belongs to another process.'
+    otroProceso: 'That pid now belongs to another process.',
+    yaNoEsHuerfano: 'It is no longer an orphan: it belongs to a live Claude session now.',
+    yaNoEsSeguro: 'It is no longer a certain orphan. Check it again.'
   },
 
   /** La barra de estado, la notificación y los comandos (src/worker.ts). */
@@ -149,8 +151,8 @@ const en = {
     sinHuerfanos: 'No orphans.',
     paraRevisar: (n: number) => `${pl(n, 'session', 'sessions')} to review.`,
     nadaQueCerrar: 'No certain orphans to close.',
-    cerre: (n: number) => `Closed ${pl(n, 'process', 'processes')}.`,
-    siguenVivos: (nombres: string) => ` Still running: ${nombres}.`,
+    confirmaHuerfanosEnPanel: (n: number, nombres: string) =>
+      `${pl(n, 'certain orphan', 'certain orphans')}: ${nombres}. Nothing was closed: confirm in the Orphans tab of the Claude Processes panel.`,
     worktreesParaCerrar: (n: number, disco: string) =>
       `${pl(n, 'inactive worktree', 'inactive worktrees')} to close${disco ? ` (${disco})` : ''}`,
     worktreesQuietos: (n: number, nombres: string) =>
@@ -204,6 +206,12 @@ const en = {
     forzar: 'Force close',
     dejarlos: 'Leave them',
     forzado: (n: number) => `Force-closed ${pl(n, 'process', 'processes')}`,
+    /** Lo que el comando «cerrar huérfanos seguros» listó y ya no entra en la confirmación. */
+    quedanFuera: (n: number, nombres: string) =>
+      n === 1
+        ? `Left out: ${nombres}. The command listed it, but it is gone or is no longer the same certain orphan.`
+        : `Left out: ${nombres}. The command listed them, but they are gone or are no longer the same certain orphans.`,
+    nadaCerrado: 'Nothing was closed',
     noSePudo: "Couldn't close",
     cerreDe: (cerrados: number, total: number) => `Closed ${cerrados} of ${pl(total, 'process', 'processes')}`,
     workerNoRespondio: (error: string) => `The worker didn't respond: ${error}`,
@@ -440,7 +448,9 @@ const es: Textos = {
   sistema: {
     noEncontre: (comando, procps) => `No encontré ${comando}${procps ? ' (viene en el paquete procps)' : ''}.`,
     yaNoEsDeClaude: 'Ya no aparece como proceso de Claude.',
-    otroProceso: 'Ese pid ya es de otro proceso.'
+    otroProceso: 'Ese pid ya es de otro proceso.',
+    yaNoEsHuerfano: 'Ya no es un huérfano: ahora es de una sesión de Claude viva.',
+    yaNoEsSeguro: 'Ya no es un huérfano seguro. Revísalo de nuevo.'
   },
 
   worker: {
@@ -458,8 +468,8 @@ const es: Textos = {
     sinHuerfanos: 'Sin huérfanos.',
     paraRevisar: (n) => `${pl(n, 'sesión para revisar', 'sesiones para revisar')}.`,
     nadaQueCerrar: 'No hay huérfanos seguros que cerrar.',
-    cerre: (n) => `Cerré ${pl(n, 'proceso', 'procesos')}.`,
-    siguenVivos: (nombres) => ` Siguen vivos: ${nombres}.`,
+    confirmaHuerfanosEnPanel: (n, nombres) =>
+      `${pl(n, 'huérfano seguro', 'huérfanos seguros')}: ${nombres}. No cerré nada: confirma en la pestaña Huérfanos del panel «Procesos de Claude».`,
     worktreesParaCerrar: (n, disco) =>
       `${pl(n, 'worktree inactivo', 'worktrees inactivos')} para cerrar${disco ? ` (${disco})` : ''}`,
     worktreesQuietos: (n, nombres) =>
@@ -511,6 +521,11 @@ const es: Textos = {
     forzar: 'Forzar cierre',
     dejarlos: 'Dejarlos así',
     forzado: (n) => `Forcé el cierre de ${pl(n, 'proceso', 'procesos')}`,
+    quedanFuera: (n, nombres) =>
+      n === 1
+        ? `Queda fuera: ${nombres}. El comando lo listó, pero ya no está o ya no es el mismo huérfano seguro.`
+        : `Quedan fuera: ${nombres}. El comando los listó, pero ya no están o ya no son los mismos huérfanos seguros.`,
+    nadaCerrado: 'No se cerró nada',
     noSePudo: 'No se pudo cerrar',
     cerreDe: (cerrados, total) => `Cerré ${cerrados} de ${pl(total, 'proceso', 'procesos')}`,
     workerNoRespondio: (error) => `El worker no respondió: ${error}`,

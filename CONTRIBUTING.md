@@ -43,7 +43,11 @@ and closes them with your `git`; it points `CLAUDE_CONFIG_DIR` at that folder so
 it never looks at your own repositories. `src/worker.test.ts` builds one too, to
 run the *close inactive worktrees* command and check that it closes nothing: the
 command may name inactive worktrees of the repositories your open Claude
-sessions work in, and the test checks those are still there as well.
+sessions work in, and the test checks those are still there as well. For the
+*close certain orphans* command it starts a real `sleep` that loses its parent
+and gives the worker a record where that process started under a session that
+has ended. The command may name real orphans of your machine next to it; the
+test checks that no signal was sent, and then closes only its own `sleep`.
 Tests run in English, the default language; `src/i18n.test.ts` covers Spanish
 and how the language is chosen.
 
@@ -75,7 +79,12 @@ and how the language is chosen.
 - Keep the logic in `src/procesos.ts` free of side effects, and cover changes
   with tests there.
 - Never signal a process that is not in a fresh snapshot with the same start
-  time. `cerrar` in `src/sistema.ts` enforces this; keep it that way.
+  time, or an orphan that is no longer one. `cerrar` in `src/sistema.ts`
+  enforces this with `rechazoDe` in `src/procesos.ts`; keep it that way.
+- A palette command never closes anything: Orca's plugin API has no
+  confirmation for commands. It leaves a request (`dejarPedido` in
+  `src/worker.ts`) and the Claude Processes panel asks, with the same
+  confirmation as its buttons.
 - Never remove a worktree that is not in a fresh reading at the same commit,
   and never pass `--force` for changes the confirmation didn't show.
   `validarCierre` in `src/worktrees.ts` enforces this; keep it that way.

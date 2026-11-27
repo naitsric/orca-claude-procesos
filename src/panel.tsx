@@ -39,6 +39,7 @@ import {
   confirmarDeSesion,
   confirmarForzar,
   confirmarHuerfanos,
+  confirmarListados,
   confirmarSesion,
   confirmarWorktrees,
   estadoCorto,
@@ -127,18 +128,33 @@ async function ejecutar(p: Pendiente): Promise<void> {
 }
 
 /**
- * El comando «Claude Processes: close inactive worktrees» no cierra nada: deja un pedido, y este
- * panel pregunta por él en la pestaña Worktrees, con los inactivos marcados en la tabla. Si el
- * panel no estaba abierto, lo encuentra al abrirse. Como con el botón, nada se cierra sin
- * confirmar aquí.
+ * Los comandos «Claude Processes: close certain orphans» y «close inactive worktrees» no cierran
+ * nada: dejan un pedido, y este panel pregunta por él en su pestaña, con las filas marcadas en la
+ * tabla. Si el panel no estaba abierto, lo encuentra al abrirse. Como con el botón, nada se
+ * cierra sin confirmar aquí.
  */
 async function atenderComando(): Promise<void> {
   // Sin la primera foto no hay lista que mostrar: el pedido se toma cuando llegue.
   if (!read(foto)) return
-  const { pedida } = await plugin.request('procesos.tomarConfirmacion').catch(() => ({ pedida: false }))
-  // El comando publicó su foto antes de pedir: la de ahora trae los worktrees que él vio.
+  const { pedido } = await plugin.request('procesos.tomarConfirmacion').catch(() => ({ pedido: null }))
+  // El comando publicó su foto antes de pedir: la de ahora trae lo que él vio.
   const f = read(foto)
-  if (!pedida || !f || f.error || read(cerrando) !== null) return
+  if (!pedido || !f || f.error || read(cerrando) !== null) return
+  if (pedido.de === 'huerfanos') {
+    // Solo los que el comando listó y siguen siendo el mismo huérfano seguro; de los que
+    // cambiaron desde entonces avisa la confirmación, o el resultado si no quedó ninguno.
+    const { pendiente: p, cambiaron } = confirmarListados('huerfanos', pedido.huerfanos, f)
+    if (!p && !cambiaron.length) return
+    set(pestana, 'huerfanos')
+    if (p) {
+      update(seleccion, (sel) => ({ ...sel, huerfanos: p.objetivos.map((o) => String(o.pid)) }))
+      pedir(p)
+    } else {
+      set(pendiente, null)
+      set(hecho, { origen: 'huerfanos', titulo: t().confirmar.nadaCerrado, lista: cambiaron })
+    }
+    return
+  }
   const inactivos = worktreesParaCerrar(f)
   if (!inactivos.length) return
   set(pestana, 'worktrees')
@@ -150,7 +166,7 @@ export function setup(ctx: PanelContext): void {
   // Hasta la primera foto, el idioma de Orca.
   usarIdioma(idiomaDeLocale(env.locale))
   ctx.subscriptions.push(plugin.on('procesos.foto', recibir))
-  ctx.subscriptions.push(plugin.on('procesos.confirmarWorktrees', () => void atenderComando()))
+  ctx.subscriptions.push(plugin.on('procesos.confirmar', () => void atenderComando()))
   // El final de un cierre largo: el resultado completo reemplaza al «sigo cerrando».
   ctx.subscriptions.push(
     plugin.on('procesos.worktreesCerrados', ({ resultados }) => {

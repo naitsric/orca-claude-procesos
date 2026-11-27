@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { access, mkdir, mkdtemp, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
-import { nombreWorktree, worktreesParaCerrar } from './confirmar'
+import { huerfanosSeguros, nombreWorktree, worktreesParaCerrar } from './confirmar'
 import { INTERVALO_MUESTRA_MS, LIMITE_VALOR_BYTES, pesoEnBytes, VENTANA_MS } from './historial'
 import { LIMITE_MEMORIA_BYTES } from './memoria'
 import { memoriaVacia, type Memoria } from './procesos'
@@ -262,11 +262,11 @@ test('el comando de cerrar worktrees inactivos no cierra nada: dice cuáles son 
     const host = mockHost({ settings: QUIETO })
     const worker = await mountWorker(main, { host, commands: ['revisar', 'cerrar-huerfanos', 'cerrar-worktrees'] })
     try {
-      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedida: false }, 'sin el comando no hay nada que confirmar')
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null }, 'sin el comando no hay nada que confirmar')
 
       const texto = String(await worker.command('cerrar-worktrees'))
       // La foto que el comando publicó justo antes de pedir la confirmación: la que verá el panel.
-      const pedido = worker.posts.findIndex((p) => p.event === 'procesos.confirmarWorktrees')
+      const pedido = worker.posts.findIndex((p) => p.event === 'procesos.confirmar')
       assert.ok(pedido > 0, 'le pide a los paneles que pregunten')
       const foto = worker.posts.slice(0, pedido).filter((p) => p.event === 'procesos.foto').at(-1)!.payload as Foto
       const inactivos = worktreesParaCerrar(foto)
@@ -285,8 +285,8 @@ test('el comando de cerrar worktrees inactivos no cierra nada: dice cuáles son 
       for (const w of inactivos) if (!w.falta) assert.ok(await existe(w.ruta), `${w.ruta} sigue ahí`)
 
       // Un solo panel toma el pedido, una vez; con eso pregunta y, si se cancela, no pasa nada más.
-      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedida: true })
-      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedida: false })
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: { de: 'worktrees' } })
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null })
       assert.ok(await existe(`${viejo}/src/a.txt`))
 
       // Solo la confirmación del panel cierra, y solo lo que el panel pide.
@@ -311,7 +311,7 @@ test('si nadie responde, el pedido del comando vence y no se cierra nada', async
       assert.match(String(await worker.command('cerrar-worktrees')), /Nothing was closed/)
       // Once minutos después alguien abre el panel: ya no hay pregunta esperándolo.
       Date.now = () => ahora() + 11 * 60_000
-      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedida: false })
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null })
       Date.now = ahora
       assert.ok(await existe(`${repo}/.claude/worktrees/viejo/src/a.txt`))
       assert.deepEqual(worker.logs.filter((l) => /cerrar worktrees/.test(l)), [])
@@ -319,5 +319,156 @@ test('si nadie responde, el pedido del comando vence y no se cierra nada', async
       Date.now = ahora
       await worker.deactivate()
     }
+  })
+})
+
+const COMANDOS = ['revisar', 'cerrar-huerfanos', 'cerrar-worktrees']
+
+function vivo(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Un huérfano de verdad y lo que el plugin recordaría de él: un `sleep` que quedó sin padre, y la
+ * memoria donde nació bajo la sesión «tarea-vieja», que terminó hace un minuto. Con esa memoria
+ * en storage el worker lo ve como huérfano seguro. Para cualquier otro (el plugin instalado en
+ * esta máquina, por ejemplo) es un `sleep` suelto, que no es de Claude. Vive dos minutos como
+ * mucho, y la prueba lo mata al terminar si sigue ahí.
+ */
+async function conHuerfano(fn: (pid: number, memoria: Memoria) => Promise<void>): Promise<void> {
+  // El shell lo deja en segundo plano, en su propio grupo, y termina: el `sleep` pasa a colgar de
+  // launchd (o de init) antes de que el worker lo vea.
+  const salida = await new Promise<string>((resolve, reject) => {
+    execFile('/bin/sh', ['-c', 'set -m 2>/dev/null; sleep 120 >/dev/null 2>&1 & echo $!'], {}, (error, stdout) =>
+      error ? reject(error) : resolve(stdout)
+    )
+  })
+  const pid = Number(salida.trim())
+  assert.ok(pid > 1 && vivo(pid), `no arrancó el proceso de prueba: ${salida}`)
+  try {
+    const ahora = Date.now()
+    const m = memoriaVacia()
+    m.sesiones['99999@1'] = {
+      pid: 99_999,
+      inicio: ahora - 3600_000,
+      pgid: 99_999,
+      cwd: '/no/existe/tarea-vieja',
+      nombre: 'tarea-vieja',
+      vista: ahora - 60_000,
+      termino: ahora - 60_000
+    }
+    m.linaje[String(pid)] = { inicio: ahora, sesion: '99999@1' }
+    await fn(pid, m)
+  } finally {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Ya no está: lo cerró la prueba.
+    }
+  }
+}
+
+test('el comando de cerrar huérfanos seguros no cierra nada: dice cuáles son y deja la pregunta para el panel', async () => {
+  await conHuerfano(async (pid, memoria) => {
+    const host = mockHost({ settings: QUIETO, storage: { memoria: JSON.parse(JSON.stringify(memoria)) } })
+    const worker = await mountWorker(main, { host, commands: COMANDOS })
+    try {
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null }, 'sin el comando no hay nada que confirmar')
+
+      const texto = String(await worker.command('cerrar-huerfanos'))
+      // La foto que el comando publicó justo antes de pedir la confirmación: la que verá el panel.
+      const aviso = worker.posts.findIndex((p) => p.event === 'procesos.confirmar')
+      assert.ok(aviso > 0, 'le pide a los paneles que pregunten')
+      const foto = worker.posts.slice(0, aviso).filter((p) => p.event === 'procesos.foto').at(-1)!.payload as Foto
+      const seguros = huerfanosSeguros(foto)
+      const mio = seguros.find((h) => h.pid === pid)
+      assert.ok(mio, 'el proceso que sobrevivió a su sesión está entre los que propone')
+      assert.equal(mio.origen?.nombre, 'tarea-vieja')
+
+      assert.match(texto, new RegExp(`^${seguros.length} certain orphans?: `))
+      for (const h of seguros.slice(0, 5)) assert.ok(texto.includes(h.nombre), `nombra ${h.nombre}`)
+      assert.match(texto, /Nothing was closed: confirm in the Orphans tab of the Claude Processes panel\.$/)
+
+      // Nada se cerró: ni el de la prueba ni los huérfanos de verdad de esta máquina.
+      assert.ok(vivo(pid))
+      assert.deepEqual(worker.logs.filter((l) => /cerrar \(/.test(l)), [], 'no mandó ninguna señal')
+
+      // Un solo panel toma el pedido, una vez, con los que el comando listó; si se cancela, no pasa nada más.
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), {
+        pedido: { de: 'huerfanos', huerfanos: seguros.map((h) => ({ pid: h.pid, inicio: h.inicio, nombre: h.nombre })) }
+      })
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null })
+      assert.ok(vivo(pid))
+      assert.deepEqual(worker.logs.filter((l) => /cerrar \(/.test(l)), [])
+
+      // Lo que el panel confirma se mira otra vez justo antes de cerrarlo. Si ese pid ya es de
+      // otro proceso (no arrancó cuando el que se listó), se deja y se dice.
+      const objetivo = { pid, inicio: mio.inicio, huerfano: 'segura' as const }
+      const cambiado = await worker.request('procesos.cerrar', {
+        objetivos: [{ ...objetivo, inicio: mio.inicio - 60_000 }],
+        senal: 'TERM',
+        arbol: true
+      })
+      assert.deepEqual(
+        cambiado.resultados.map((r) => [r.pid, r.resultado, r.detalle]),
+        [[pid, 'rechazado', 'That pid now belongs to another process.']]
+      )
+      assert.ok(vivo(pid), 'el que cambió sigue vivo')
+
+      // Solo la confirmación del panel cierra, y solo lo que el panel pide.
+      const { resultados } = await worker.request('procesos.cerrar', { objetivos: [objetivo], senal: 'TERM', arbol: true })
+      assert.deepEqual(resultados.map((r) => [r.pid, r.resultado]), [[pid, 'cerrado']])
+      assert.ok(!vivo(pid))
+      assert.deepEqual(worker.refusals, [])
+    } finally {
+      await worker.deactivate()
+    }
+  })
+})
+
+test('si nadie responde, el pedido de cerrar huérfanos vence y no se cierra nada', async () => {
+  await conHuerfano(async (pid, memoria) => {
+    const host = mockHost({ settings: QUIETO, storage: { memoria: JSON.parse(JSON.stringify(memoria)) } })
+    const worker = await mountWorker(main, { host, commands: COMANDOS })
+    const ahora = Date.now
+    try {
+      assert.match(String(await worker.command('cerrar-huerfanos')), /Nothing was closed/)
+      // Once minutos después alguien abre el panel: ya no hay pregunta esperándolo.
+      Date.now = () => ahora() + 11 * 60_000
+      assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null })
+      Date.now = ahora
+      assert.ok(vivo(pid))
+      assert.deepEqual(worker.logs.filter((l) => /cerrar \(/.test(l)), [])
+    } finally {
+      Date.now = ahora
+      await worker.deactivate()
+    }
+  })
+})
+
+test('una pregunta a la vez: el pedido de otro comando reemplaza al que nadie tomó', async () => {
+  await conRepoInactivo(async (repo) => {
+    await conHuerfano(async (pid, memoria) => {
+      const host = mockHost({ settings: QUIETO, storage: { memoria: JSON.parse(JSON.stringify(memoria)) } })
+      const worker = await mountWorker(main, { host, commands: COMANDOS })
+      try {
+        assert.match(String(await worker.command('cerrar-worktrees')), /confirm in the Worktrees tab/)
+        assert.match(String(await worker.command('cerrar-huerfanos')), /confirm in the Orphans tab/)
+        const { pedido } = await worker.request('procesos.tomarConfirmacion')
+        assert.equal(pedido?.de, 'huerfanos', 'el panel pregunta por lo último que se pidió')
+        assert.deepEqual(await worker.request('procesos.tomarConfirmacion'), { pedido: null })
+        // Ninguno de los dos comandos cerró nada.
+        assert.ok(vivo(pid))
+        assert.ok(await existe(`${repo}/.claude/worktrees/viejo/src/a.txt`))
+        assert.deepEqual(worker.logs.filter((l) => /cerrar \(|cerrar worktrees/.test(l)), [])
+      } finally {
+        await worker.deactivate()
+      }
+    })
   })
 })

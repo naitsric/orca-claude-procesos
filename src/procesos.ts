@@ -3,7 +3,7 @@
 // archivos, y le pasa lo que obtiene. Los motivos salen en el idioma actual (./i18n).
 import { carpeta, duracion, memoria as fmtMem, puertos as fmtPuertos } from './formato'
 import { idioma, t } from './i18n'
-import type { Certeza, Foto, Huerfano, Proceso, Rol, Sesion, Totales, Veredicto } from './tipos'
+import type { Certeza, Foto, Huerfano, Objetivo, Proceso, Rol, Sesion, Totales, Veredicto } from './tipos'
 
 /** Dos lecturas del mismo proceso difieren hasta ~1 s en `inicio` (sale de etime). */
 export const TOLERANCIA_MS = 3000
@@ -852,17 +852,34 @@ export function armarFoto(
   return { foto, memoria }
 }
 
-/** Todo lo que la foto deja cerrar, por pid, con su `inicio` para validar la identidad. */
-export function cerrables(foto: Foto): Map<number, { inicio: number; nombre: string }> {
-  const mapa = new Map<number, { inicio: number; nombre: string }>()
+/** Todo lo que la foto deja cerrar, por pid, con su `inicio` para validar la identidad y, si es
+ *  un huérfano, con qué certeza. */
+export function cerrables(foto: Foto): Map<number, { inicio: number; nombre: string; huerfano: Certeza | null }> {
+  const mapa = new Map<number, { inicio: number; nombre: string; huerfano: Certeza | null }>()
   for (const s of foto.sesiones) {
-    mapa.set(s.pid, { inicio: s.inicio, nombre: `claude (${s.nombre ?? carpeta(s.cwd, foto.home)})` })
-    for (const p of s.procesos) mapa.set(p.pid, { inicio: p.inicio, nombre: p.nombre })
+    mapa.set(s.pid, { inicio: s.inicio, nombre: `claude (${s.nombre ?? carpeta(s.cwd, foto.home)})`, huerfano: null })
+    for (const p of s.procesos) mapa.set(p.pid, { inicio: p.inicio, nombre: p.nombre, huerfano: null })
   }
-  for (const h of foto.huerfanos) mapa.set(h.pid, { inicio: h.inicio, nombre: h.nombre })
+  for (const h of foto.huerfanos) mapa.set(h.pid, { inicio: h.inicio, nombre: h.nombre, huerfano: h.certeza })
   return mapa
 }
 
 export function mismoProceso(a: number, b: number): boolean {
   return mismoInicio(a, b)
+}
+
+/**
+ * Por qué no se cierra un objetivo, contra lo que deja cerrar una foto tomada ahora mismo; null si
+ * sigue como se vio. Tiene que estar en la foto con el mismo `inicio`: un pid que el sistema le
+ * dio a otro proceso no se toca. Y si se vio como huérfano, tiene que seguir siéndolo: uno que
+ * ahora es de una sesión viva, o que se vio seguro y ya no lo es, se deja.
+ */
+export function rechazoDe(o: Objetivo, permitidos: ReturnType<typeof cerrables>): string | null {
+  const s = t().sistema
+  const info = permitidos.get(o.pid)
+  if (!info) return s.yaNoEsDeClaude
+  if (!mismoProceso(info.inicio, o.inicio)) return s.otroProceso
+  if (o.huerfano && !info.huerfano) return s.yaNoEsHuerfano
+  if (o.huerfano === 'segura' && info.huerfano !== 'segura') return s.yaNoEsSeguro
+  return null
 }

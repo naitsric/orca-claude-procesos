@@ -8,7 +8,7 @@ import {
   PS_DESACOPLADO,
   revisarFixture
 } from './fixtures'
-import { comandoDeBash, cerrables, memoriaVacia, nombreDe, parsearPs, segundosDeEtime } from './procesos'
+import { comandoDeBash, cerrables, memoriaVacia, nombreDe, parsearPs, rechazoDe, segundosDeEtime } from './procesos'
 
 test('lee etime en todos sus formatos', () => {
   assert.equal(segundosDeEtime('05'), 0)
@@ -179,4 +179,52 @@ test('solo deja cerrar lo que está en la foto', () => {
   assert.ok(permitidos.has(5001))
   assert.ok(!permitidos.has(8000))
   assert.ok(!permitidos.has(1668))
+})
+
+test('antes de cerrar un huérfano mira que siga siendo el mismo: mismo pid, mismo inicio y todavía huérfano', () => {
+  const { foto } = revisarFixture(memoriaConSesionMuerta())
+  const permitidos = cerrables(foto)
+  const grafana = foto.huerfanos.find((h) => h.pid === 5001)!
+  const mcpSuelto = foto.huerfanos.find((h) => h.pid === 8900)!
+  const deSesion = foto.sesiones[0].procesos.find((p) => p.pid === 4281)!
+  assert.equal(permitidos.get(5001)?.huerfano, 'segura')
+  assert.equal(permitidos.get(8900)?.huerfano, 'probable')
+  assert.equal(permitidos.get(4281)?.huerfano, null)
+  assert.equal(permitidos.get(4129)?.huerfano, null)
+
+  // Sigue igual: se cierra. Dos lecturas del mismo proceso difieren hasta un segundo en `inicio`.
+  assert.equal(rechazoDe({ pid: 5001, inicio: grafana.inicio, huerfano: 'segura' }, permitidos), null)
+  assert.equal(rechazoDe({ pid: 5001, inicio: grafana.inicio + 1000, huerfano: 'segura' }, permitidos), null)
+
+  // Ya terminó.
+  assert.equal(rechazoDe({ pid: 7777, inicio: grafana.inicio, huerfano: 'segura' }, permitidos), 'It no longer shows up as a Claude process.')
+  // El sistema le dio ese pid a otro proceso.
+  assert.equal(
+    rechazoDe({ pid: 5001, inicio: grafana.inicio - 60_000, huerfano: 'segura' }, permitidos),
+    'That pid now belongs to another process.'
+  )
+  // Ya no es huérfano: es de una sesión viva. Sin pedirlo como huérfano (desde la tarjeta de la
+  // sesión) sí se deja cerrar.
+  assert.equal(
+    rechazoDe({ pid: 4281, inicio: deSesion.inicio, huerfano: 'segura' }, permitidos),
+    'It is no longer an orphan: it belongs to a live Claude session now.'
+  )
+  assert.equal(rechazoDe({ pid: 4281, inicio: deSesion.inicio, huerfano: 'probable' }, permitidos), 'It is no longer an orphan: it belongs to a live Claude session now.')
+  assert.equal(rechazoDe({ pid: 4281, inicio: deSesion.inicio }, permitidos), null)
+  // Se vio seguro y ya solo se parece a algo de Claude. Elegido como dudoso en la tabla, se cierra.
+  assert.equal(
+    rechazoDe({ pid: 8900, inicio: mcpSuelto.inicio, huerfano: 'segura' }, permitidos),
+    'It is no longer a certain orphan. Check it again.'
+  )
+  assert.equal(rechazoDe({ pid: 8900, inicio: mcpSuelto.inicio, huerfano: 'probable' }, permitidos), null)
+})
+
+test('un huérfano seguro que el plugin deja de reconocer no se cierra con lo que se pidió antes', () => {
+  // Con la memoria de la sesión muerta, mcp-grafana (5001) es un huérfano seguro, y así se pide.
+  const antes = revisarFixture(memoriaConSesionMuerta()).foto.huerfanos.find((h) => h.pid === 5001)!
+  assert.equal(antes.certeza, 'segura')
+  const pedido = { pid: antes.pid, inicio: antes.inicio, huerfano: antes.certeza }
+  // Sin esa memoria, la foto de justo antes de cerrar solo lo tiene como probable.
+  const ahora = cerrables(revisarFixture(memoriaVacia()).foto)
+  assert.equal(rechazoDe(pedido, ahora), 'It is no longer a certain orphan. Check it again.')
 })

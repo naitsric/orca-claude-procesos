@@ -168,8 +168,21 @@ export type Foto = {
   error?: string
 }
 
-/** Un proceso a cerrar. `inicio` evita matar un pid que el sistema ya reutilizó. */
-export type Objetivo = { pid: number; inicio: number }
+/**
+ * Un proceso a cerrar, como lo viste. `inicio` evita matar un pid que el sistema ya reutilizó.
+ * `huerfano` dice que lo viste como huérfano, y con qué certeza: el worker lo deja si al cerrar ya
+ * no es huérfano (ahora es de una sesión viva) o si lo viste seguro y ya no lo es.
+ */
+export type Objetivo = { pid: number; inicio: number; huerfano?: Certeza }
+
+/** Un huérfano como lo nombró el comando «cerrar huérfanos seguros». */
+export type HuerfanoListado = { pid: number; inicio: number; nombre: string }
+
+/**
+ * Lo que un comando de la paleta deja para que un panel pregunte: un comando no puede preguntar.
+ * El de huérfanos trae los que listó: el panel pregunta solo por esos, no por los que haya después.
+ */
+export type PedidoDeComando = { de: 'worktrees' } | { de: 'huerfanos'; huerfanos: HuerfanoListado[] }
 
 export type Senal = 'TERM' | 'KILL'
 

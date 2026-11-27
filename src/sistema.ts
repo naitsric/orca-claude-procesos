@@ -14,11 +14,11 @@ import {
   cwdsDeLsof,
   escuchasDeProcNet,
   leerInfoClaude,
-  mismoProceso,
   parsearPs,
   pidsRelevantes,
   puertosDeLsof,
   puertosDeSockets,
+  rechazoDe,
   type CpuLeida,
   type Fila,
   type InfoClaude,
@@ -204,8 +204,10 @@ async function esperar(pids: readonly number[], ms: number): Promise<void> {
 
 /**
  * Cierra solo lo que está en una foto tomada ahora mismo, con el mismo `inicio`: así no se mata
- * un pid que el sistema le dio a otro proceso ni algo que no sea de Claude. Con `arbol`, primero
- * avisa a los objetivos (una sesión cierra sus MCP sola) y después a los descendientes que sigan.
+ * un pid que el sistema le dio a otro proceso ni algo que no sea de Claude. Lo que se pidió como
+ * huérfano tiene que seguir siéndolo en esa foto (`rechazoDe`). Lo que cambió se deja, y sale en
+ * el resultado como rechazado, con el motivo. Con `arbol`, primero avisa a los objetivos (una
+ * sesión cierra sus MCP sola) y después a los descendientes que sigan.
  */
 export async function cerrar(
   objetivos: readonly Objetivo[],
@@ -220,19 +222,10 @@ export async function cerrar(
   const resultados: ResultadoCierre[] = []
   const primera: number[] = []
   for (const o of objetivos) {
-    const info = permitidos.get(o.pid)
-    if (protegidos.has(o.pid) || !info) {
-      resultados.push({
-        pid: o.pid,
-        nombre: info?.nombre ?? `pid ${o.pid}`,
-        resultado: 'rechazado',
-        detalle: t().sistema.yaNoEsDeClaude
-      })
-    } else if (!mismoProceso(info.inicio, o.inicio)) {
-      resultados.push({ pid: o.pid, nombre: info.nombre, resultado: 'rechazado', detalle: t().sistema.otroProceso })
-    } else if (!primera.includes(o.pid)) {
-      primera.push(o.pid)
-    }
+    const nombre = permitidos.get(o.pid)?.nombre ?? `pid ${o.pid}`
+    const rechazo = protegidos.has(o.pid) ? t().sistema.yaNoEsDeClaude : rechazoDe(o, permitidos)
+    if (rechazo) resultados.push({ pid: o.pid, nombre, resultado: 'rechazado', detalle: rechazo })
+    else if (!primera.includes(o.pid)) primera.push(o.pid)
   }
 
   const segunda: number[] = []
